@@ -2,7 +2,6 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { google } from "googleapis";
-import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -11,7 +10,6 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
-app.use(cookieParser());
 
 // CORS for PocketHost deployment
 app.use((req, res, next) => {

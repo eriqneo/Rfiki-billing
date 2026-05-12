@@ -1,11 +1,15 @@
-import React from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import React, { useMemo } from 'react';
 import { db } from '../db/db';
 import { TrendingUp, CreditCard, Users, Clock, Plus, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GreetingBanner } from '../components/GreetingBanner';
 import { cn } from '../lib/utils';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
+
+function sameClient(recordClientId: unknown, client: any) {
+  const candidate = String(recordClientId || '');
+  return candidate === String(client.node_id || '') || candidate === String(client.id || '');
+}
 
 export function Dashboard({ setView }: { setView: (view: any) => void }) {
   const { data: expenses } = useUnifiedCollection<any>('expenses', () => db.expenses.toArray());
@@ -20,9 +24,36 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
   const remainingInstances = (instances || []).filter((i: any) => !i.client_id).length;
   const activeAgreements = (agreements || []).filter((a: any) => a.status === 'active').length;
   const pendingPayments = (payments || []).filter((p: any) => p.status === 'pending').length;
-  const totalPromises = (billingPromises || []).length;
-  const completedPayments = (payments || []).filter((p: any) => p.status === 'completed').length;
-  const successRate = totalPromises > 0 ? ((completedPayments / totalPromises) * 100).toFixed(1) : '--';
+  const projectSuccess = useMemo(() => {
+    const getBillableTarget = (client: any) => {
+      const agreedPrice = Number(client.agreed_price) || 0;
+      const promisedAmount = (billingPromises || [])
+        .filter((promise: any) => sameClient(promise.client_id, client))
+        .reduce((sum: number, promise: any) => sum + Math.max(Number(promise.amount_due) || 0, 0), 0);
+
+      return Math.max(agreedPrice, promisedAmount);
+    };
+
+    const projectClients = (clients || []).filter((client: any) => getBillableTarget(client) > 0);
+    const successfulProjects = projectClients.filter((client: any) => {
+      const billableTarget = getBillableTarget(client);
+      const completedRevenue = (payments || [])
+        .filter((payment: any) => payment.status === 'completed' && sameClient(payment.client_id, client))
+        .reduce((sum: number, payment: any) => sum + (Number(payment.amount) || 0), 0);
+      const clientPromises = (billingPromises || [])
+        .filter((promise: any) => sameClient(promise.client_id, client) && (Number(promise.amount_due) || 0) > 0);
+      const allPromisesFulfilled = clientPromises.length > 0 && clientPromises.every((promise: any) => promise.status === 'fulfilled');
+
+      return completedRevenue >= billableTarget || allPromisesFulfilled;
+    }).length;
+
+    return {
+      total: projectClients.length,
+      successful: successfulProjects,
+      rate: projectClients.length > 0 ? (successfulProjects / projectClients.length) * 100 : null
+    };
+  }, [billingPromises, clients, payments]);
+  const successRate = projectSuccess.rate === null ? '--' : projectSuccess.rate.toFixed(1);
 
   const stats = { revenue: totalRevenue, expenses: totalExpenses, remainingInstances, activeAgreements, pendingPayments, successRate };
 
@@ -50,7 +81,12 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
           { label: 'Total Revenue', value: `KSh ${totalRevenue.toLocaleString()}`, color: 'accent-green' },
           { label: 'Available Servers', value: remainingInstances, color: 'accent-green' },
           { label: 'Active Agreements', value: activeAgreements, color: 'text-main' },
-          { label: 'Project Success Rate', value: successRate !== '--' ? `${successRate}%` : '--', color: 'accent-green' },
+          {
+            label: 'Project Success Rate',
+            value: successRate !== '--' ? `${successRate}%` : '--',
+            color: 'accent-green',
+            sub: projectSuccess.total > 0 ? `${projectSuccess.successful}/${projectSuccess.total} complete` : 'No projects'
+          },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
@@ -66,6 +102,11 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
             )}>
               {stat.value}
             </p>
+            {'sub' in stat && stat.sub && (
+              <p className="mt-2 text-[9px] font-black uppercase tracking-[0.14em] text-text-dim">
+                {stat.sub}
+              </p>
+            )}
             <div className="absolute top-0 right-0 w-16 h-16 bg-accent-green/5 blur-2xl group-hover:bg-accent-green/10 transition-all" />
           </motion.div>
         ))}

@@ -16,6 +16,8 @@ import { useAuth } from './contexts/AuthContext';
 import { LoginScreen } from './views/LoginScreen';
 import { PasswordChangeModal } from './components/PasswordChangeModal';
 import { AccessDenied } from './components/AccessDenied';
+import { StorageNotice } from './components/StorageNotice';
+import { PwaInstallPrompt } from './components/PwaInstallPrompt';
 import { AnimatePresence, motion } from 'motion/react';
 
 export default function App() {
@@ -103,18 +105,32 @@ export default function App() {
   };
 
   if (isLoading) {
-    return <div className="min-h-screen bg-bg-deep flex items-center justify-center">
-      <div className="w-8 h-8 rounded-full border-4 border-accent-green/20 border-t-accent-green animate-spin" />
-    </div>;
+    return (
+      <>
+        <div className="min-h-screen bg-bg-deep flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full border-4 border-accent-green/20 border-t-accent-green animate-spin" />
+        </div>
+        <PwaInstallPrompt />
+        <StorageNotice />
+      </>
+    );
   }
 
   if (!isAuthenticated) {
-    return <LoginScreen />;
+    return (
+      <>
+        <LoginScreen />
+        <PwaInstallPrompt />
+        <StorageNotice />
+      </>
+    );
   }
 
   return (
     <div className="min-h-screen bg-bg-deep flex flex-col lg:flex-row font-sans text-text-main selection:bg-accent-green selection:text-bg-deep transition-colors duration-500">
       <PasswordChangeModal />
+      <PwaInstallPrompt />
+      <StorageNotice />
       <Sidebar 
         currentView={currentView} 
         setView={setCurrentView} 
