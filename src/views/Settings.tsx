@@ -79,7 +79,7 @@ export function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [userRole, setUserRole] = useState<'Admin' | 'Editor' | 'Viewer'>('Viewer');
   const [editingId, setEditingId] = useState<number | string | null>(null);
-  const { records: pbUsers } = usePbCollection<any>('users');
+  const { records: pbUsers, refetch: refetchPbUsers, upsertRecord: upsertPbUser, removeRecord: removePbUser } = usePbCollection<any>('users');
 
   // Business State
   const [bizName, setBizName] = useState('');
@@ -122,7 +122,23 @@ export function Settings() {
     { id: 'settings', label: 'Settings' }
   ];
 
-  const fetchPbUsers = async () => {};
+  const fetchPbUsers = async () => {
+    await refetchPbUsers();
+  };
+
+  const getDefaultPermissions = (role: 'Admin' | 'Editor' | 'Viewer') =>
+    role === 'Admin' ? MODULES.map(m => m.id) : MODULES.filter(m => m.id !== 'settings').map(m => m.id);
+
+  const getPbErrorMessage = (error: any) => {
+    const responseData = error?.response?.data;
+    if (responseData && typeof responseData === 'object') {
+      const fieldErrors = Object.entries(responseData)
+        .map(([field, value]: [string, any]) => `${field}: ${value?.message || value?.code || 'invalid'}`)
+        .join('; ');
+      if (fieldErrors) return fieldErrors;
+    }
+    return error?.response?.message || error?.message || 'PocketBase rejected the request';
+  };
 
   const handleTogglePermission = async (user: any, moduleId: string) => {
     if (user.role === 'Admin') return;
@@ -217,29 +233,51 @@ export function Settings() {
       return;
     }
 
+    if (!editingId && userPassword.length < 8) {
+      showToast('Password must be at least 8 characters', 'error');
+      return;
+    }
+
+    const existingUser = editingId
+      ? (import.meta.env.VITE_AUTH_MODE === 'pocketbase' ? pbUsers : teamMembers)?.find((u: any) => u.id === editingId)
+      : null;
+    const modulePermissions = existingUser?.role && existingUser.role !== userRole
+      ? getDefaultPermissions(userRole)
+      : existingUser?.module_permissions || getDefaultPermissions(userRole);
+
     if (editingId) {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
         try {
           const updateData: any = {
             name: userName,
-            email: userEmail,
             role: userRole,
+            module_permissions: modulePermissions,
           };
+          if (userEmail !== existingUser?.email) {
+            updateData.email = userEmail;
+          }
           if (userPassword) {
+            if (userPassword.length < 8) {
+              showToast('Password must be at least 8 characters', 'error');
+              return;
+            }
             updateData.password = userPassword;
             updateData.passwordConfirm = userPassword;
           }
-          await pb.collection('users').update(editingId as string, updateData);
+          const updated = await pb.collection('users').update(editingId as string, updateData);
+          upsertPbUser(updated);
           fetchPbUsers();
           showToast('User updated in PocketBase', 'success');
         } catch (error: any) {
-          showToast(`Update failed: ${error.message}`, 'error');
+          console.error('PB user update failed:', error?.response || error);
+          showToast(`Update failed: ${getPbErrorMessage(error)}`, 'error');
         }
       } else {
         const updateData: any = {
           name: userName,
           email: userEmail,
           role: userRole,
+          module_permissions: modulePermissions,
           synced: false
         };
         if (userPassword) {
@@ -251,20 +289,22 @@ export function Settings() {
     } else {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
         try {
-          await pb.collection('users').create({
-            username: userEmail.split('@')[0] + Math.floor(Math.random() * 1000),
+          const created = await pb.collection('users').create({
             email: userEmail,
-            password: userPassword || 'password123',
-            passwordConfirm: userPassword || 'password123',
+            password: userPassword,
+            passwordConfirm: userPassword,
             name: userName,
             role: userRole,
-            module_permissions: [],
+            module_permissions: getDefaultPermissions(userRole),
             emailVisibility: true,
+            verified: true,
           });
+          upsertPbUser(created);
           fetchPbUsers();
           showToast('User created in PocketBase', 'success');
         } catch (error: any) {
-          showToast(`Creation failed: ${error.message}`, 'error');
+          console.error('PB user creation failed:', error?.response || error);
+          showToast(`Creation failed: ${getPbErrorMessage(error)}`, 'error');
         }
       } else {
         await db.team_members.add({
@@ -273,6 +313,7 @@ export function Settings() {
           role: userRole,
           password_hash: userPassword,
           must_change_password: true,
+          module_permissions: getDefaultPermissions(userRole),
           synced: false
         });
       }
@@ -290,6 +331,7 @@ export function Settings() {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
         try {
           await pb.collection('users').delete(id as string);
+          removePbUser(id);
           fetchPbUsers();
           showToast('User removed from PocketBase', 'success');
         } catch (e) {

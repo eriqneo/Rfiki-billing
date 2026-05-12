@@ -1,7 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { pb } from '../lib/pocketbase';
 
 const CACHE_KEY_PREFIX = 'rafiki_pb_cache_';
+const AUTO_REFETCH_INTERVAL_MS = 30000;
+
+function canRefreshCollection() {
+  return (
+    import.meta.env.VITE_AUTH_MODE === 'pocketbase' &&
+    navigator.onLine &&
+    document.visibilityState !== 'hidden' &&
+    pb.authStore.isValid
+  );
+}
 
 export function usePbCollection<T>(collectionName: string) {
   // Seed initial state from localStorage cache for instant render (no flicker)
@@ -16,6 +26,58 @@ export function usePbCollection<T>(collectionName: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<any>(null);
 
+  const updateRecords = useCallback((newRecords: T[]) => {
+    setRecords(newRecords);
+    try {
+      localStorage.setItem(CACHE_KEY_PREFIX + collectionName, JSON.stringify(newRecords));
+    } catch { /* storage quota exceeded — ignore */ }
+  }, [collectionName]);
+
+  const refetch = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase' || !pb.authStore.isValid) {
+      return [];
+    }
+
+    if (!options.silent) setIsLoading(true);
+    try {
+      const data = await pb.collection(collectionName).getFullList();
+      const next = data as unknown as T[];
+      updateRecords(next);
+      setError(null);
+      return next;
+    } catch (err) {
+      console.error(`Refetch failed for ${collectionName}:`, err);
+      setError(err);
+      return [];
+    } finally {
+      if (!options.silent) setIsLoading(false);
+    }
+  }, [collectionName, updateRecords]);
+
+  const upsertRecord = useCallback((record: T) => {
+    setRecords((prev) => {
+      const recordId = (record as any).id;
+      const exists = prev.some((item: any) => item.id === recordId);
+      const next = exists
+        ? prev.map((item: any) => item.id === recordId ? record : item)
+        : [record, ...prev];
+      try {
+        localStorage.setItem(CACHE_KEY_PREFIX + collectionName, JSON.stringify(next));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, [collectionName]);
+
+  const removeRecord = useCallback((id: string | number) => {
+    setRecords((prev) => {
+      const next = prev.filter((item: any) => item.id !== id);
+      try {
+        localStorage.setItem(CACHE_KEY_PREFIX + collectionName, JSON.stringify(next));
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, [collectionName]);
+
   useEffect(() => {
     if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase' || !pb.authStore.isValid) {
       setIsLoading(false);
@@ -24,20 +86,11 @@ export function usePbCollection<T>(collectionName: string) {
 
     let isMounted = true;
 
-    const updateRecords = (newRecords: T[]) => {
-      if (!isMounted) return;
-      setRecords(newRecords);
-      // Write-through cache — persist to localStorage for instant next load
-      try {
-        localStorage.setItem(CACHE_KEY_PREFIX + collectionName, JSON.stringify(newRecords));
-      } catch { /* storage quota exceeded — ignore */ }
-    };
-
     // 1. Initial fetch
     const fetchInitial = async () => {
       try {
         const data = await pb.collection(collectionName).getFullList();
-        updateRecords(data as unknown as T[]);
+        if (isMounted) updateRecords(data as unknown as T[]);
         setIsLoading(false);
       } catch (err) {
         if (isMounted) {
@@ -88,7 +141,39 @@ export function usePbCollection<T>(collectionName: string) {
       isMounted = false;
       pb.collection(collectionName).unsubscribe('*');
     };
-  }, [collectionName]);
+  }, [collectionName, updateRecords]);
 
-  return { records, isLoading, error };
+  useEffect(() => {
+    if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase') return;
+
+    const wakeRefresh = () => {
+      if (canRefreshCollection()) refetch({ silent: true });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') wakeRefresh();
+    };
+
+    const unsubscribeAuth = pb.authStore.onChange(() => wakeRefresh());
+
+    window.addEventListener('online', wakeRefresh);
+    window.addEventListener('focus', wakeRefresh);
+    window.addEventListener('pageshow', wakeRefresh);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const interval = window.setInterval(() => {
+      if (canRefreshCollection()) refetch({ silent: true });
+    }, AUTO_REFETCH_INTERVAL_MS);
+
+    return () => {
+      unsubscribeAuth();
+      window.removeEventListener('online', wakeRefresh);
+      window.removeEventListener('focus', wakeRefresh);
+      window.removeEventListener('pageshow', wakeRefresh);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.clearInterval(interval);
+    };
+  }, [refetch]);
+
+  return { records, isLoading, error, refetch, upsertRecord, removeRecord };
 }

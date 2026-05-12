@@ -39,6 +39,10 @@ type RebuildSyncQueueOptions = {
   collections?: SyncCollection[];
 };
 
+function canRunForegroundSync() {
+  return navigator.onLine && document.visibilityState !== 'hidden';
+}
+
 function stripLocalFields(record: any) {
   const { id, pb_id, synced, file_blob, ...pbData } = record;
   if (pbData.name && !pbData.instance_name) {
@@ -355,16 +359,39 @@ export function useSync() {
 
   useEffect(() => {
     const unsubscribe = pb.authStore.onChange(() => {
-      if (navigator.onLine) processSyncQueue();
+      if (canRunForegroundSync()) processSyncQueue();
     });
 
     const interval = window.setInterval(() => {
-      if (navigator.onLine) processSyncQueue();
+      if (canRunForegroundSync()) processSyncQueue();
     }, AUTO_SYNC_INTERVAL_MS);
 
     return () => {
       unsubscribe();
       window.clearInterval(interval);
+    };
+  }, [processSyncQueue]);
+
+  useEffect(() => {
+    const wakeSync = () => {
+      setIsOnline(navigator.onLine);
+      if (canRunForegroundSync()) processSyncQueue();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') wakeSync();
+    };
+
+    window.addEventListener('online', wakeSync);
+    window.addEventListener('focus', wakeSync);
+    window.addEventListener('pageshow', wakeSync);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('online', wakeSync);
+      window.removeEventListener('focus', wakeSync);
+      window.removeEventListener('pageshow', wakeSync);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [processSyncQueue]);
 
@@ -377,7 +404,7 @@ export function useSync() {
       operation: 'CREATE',
       timestamp: Date.now()
     });
-    if (navigator.onLine) processSyncQueue();
+    if (canRunForegroundSync()) processSyncQueue();
     return id;
   };
 
@@ -390,7 +417,7 @@ export function useSync() {
       operation: 'UPDATE',
       timestamp: Date.now()
     });
-    if (navigator.onLine) processSyncQueue();
+    if (canRunForegroundSync()) processSyncQueue();
   };
 
   const deleteEntity = async <T extends keyof EntityMap>(entity: T, id: number) => {

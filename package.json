@@ -10,7 +10,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "pb:setup-inventory": "tsx scripts/ensure-pocketbase-inventory.ts",
-    "pb:reconcile-inventory": "tsx scripts/reconcile-pocketbase-inventory.ts"
+    "pb:reconcile-inventory": "tsx scripts/reconcile-pocketbase-inventory.ts",
+    "pb:setup-users": "tsx scripts/ensure-pocketbase-users.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
