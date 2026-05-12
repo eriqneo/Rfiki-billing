@@ -52,14 +52,14 @@ export function Expenses() {
 
   const totalCollectedRevenue = useMemo(() => {
     if (!payments) return 0;
-    
+
     let filteredPayments = payments.filter(p => p.status === 'completed');
-    
+
     if (dateRange.start && dateRange.end) {
-      filteredPayments = filteredPayments.filter(p => 
-        isWithinInterval(parseISO(p.date), { 
-          start: parseISO(dateRange.start), 
-          end: parseISO(dateRange.end) 
+      filteredPayments = filteredPayments.filter(p =>
+        isWithinInterval(parseISO(p.date), {
+          start: parseISO(dateRange.start),
+          end: parseISO(dateRange.end)
         })
       );
     } else {
@@ -74,17 +74,17 @@ export function Expenses() {
   const filteredExpenses = useMemo(() => {
     if (!expenses) return [];
     return expenses.filter(e => {
-      const matchesSearch = (e.description || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+      const matchesSearch = (e.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                            (e.sub_tag || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchesCategory = selectedCategory === 'ALL' || e.category === selectedCategory;
       const matchesTag = !tracedTag || e.sub_tag === tracedTag;
-      
+
       let matchesDate = true;
       if (dateRange.start && dateRange.end) {
         const d = parseISO(e.date);
-        matchesDate = isWithinInterval(d, { 
-          start: parseISO(dateRange.start), 
-          end: parseISO(dateRange.end) 
+        matchesDate = isWithinInterval(d, {
+          start: parseISO(dateRange.start),
+          end: parseISO(dateRange.end)
         });
       }
 
@@ -100,15 +100,15 @@ export function Expenses() {
     if (!expenses) return [];
     const now = new Date();
     const interval = { start: startOfMonth(now), end: endOfMonth(now) };
-    
+
     return VOTEHEADS.map(v => {
       const spent = expenses
         .filter(e => e.category === v && isWithinInterval(parseISO(e.date), interval))
         .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-      
+
       const revenueShare = totalCollectedRevenue > 0 ? (spent / totalCollectedRevenue) * 100 : 0;
       const totalSpendShare = totalMonthlySpend > 0 ? (spent / totalMonthlySpend) * 100 : 0;
-      
+
       return { name: v, spent, revenueShare, totalSpendShare };
     });
   }, [expenses, totalMonthlySpend, totalCollectedRevenue]);
@@ -135,10 +135,10 @@ export function Expenses() {
 
   const confirmDelete = async () => {
     if (!deletingExpense) return;
-    
+
     try {
       const isPbMode = import.meta.env.VITE_AUTH_MODE === 'pocketbase';
-      
+
       // 1. PocketBase Deletion
       if (isPbMode && isOnline) {
         // In PB mode, the 'id' field of the record is the PocketBase ID (string)
@@ -147,7 +147,7 @@ export function Expenses() {
           await pb.collection('expenses').delete(pbId);
         }
       }
-      
+
       // 2. Local Dexie Deletion
       if (typeof deletingExpense.id === 'number') {
         await db.expenses.delete(deletingExpense.id);
@@ -161,7 +161,7 @@ export function Expenses() {
           }
         }
       }
-      
+
       showToast('Expenditure record expunged from system', 'success');
     } catch (e) {
       console.error('RAFIKI_ERROR: Failed to expunge expense:', e);
@@ -180,7 +180,7 @@ export function Expenses() {
         </div>
         <div className="flex gap-4">
           {tracedTag && (
-            <button 
+            <button
               onClick={() => setTracedTag(null)}
               className="text-[10px] font-black text-red-400 uppercase tracking-[0.2em] border border-red-400/20 px-6 py-2.5 rounded-xl hover:bg-red-400/5 transition-colors flex items-center gap-2"
             >
@@ -188,7 +188,7 @@ export function Expenses() {
               Reset Trace
             </button>
           )}
-          <button 
+          <button
             onClick={() => setIsModalOpen(true)}
             className="text-[10px] font-black text-bg-deep uppercase tracking-[0.2em] bg-accent-green px-6 py-2.5 rounded-xl transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(57,255,20,0.3)] flex items-center gap-2"
           >
@@ -197,12 +197,12 @@ export function Expenses() {
           </button>
         </div>
       </header>
-      
+
       {/* Filter Matrix */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-2 mt-4">
         <div className="relative group lg:col-span-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-dim group-focus-within:text-accent-green transition-colors" />
-          <input 
+          <input
             type="text"
             value={searchTerm}
             onChange={e => setSearchTerm(e.target.value)}
@@ -212,7 +212,7 @@ export function Expenses() {
         </div>
 
         <div className="lg:col-span-1">
-          <select 
+          <select
             value={selectedCategory}
             onChange={e => setSelectedCategory(e.target.value)}
             className="w-full bg-bg-deep border border-white/5 rounded-2xl py-4 px-5 text-[10px] font-black text-text-main focus:outline-none focus:border-accent-green/50 uppercase tracking-widest appearance-none cursor-pointer"
@@ -225,7 +225,7 @@ export function Expenses() {
         <div className="lg:col-span-2 grid grid-cols-2 gap-2">
           <div className="relative group">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[8px] font-black text-text-dim uppercase tracking-tighter pointer-events-none">FROM:</span>
-            <input 
+            <input
               type="date"
               value={dateRange.start}
               onChange={e => setDateRange({...dateRange, start: e.target.value})}
@@ -234,7 +234,7 @@ export function Expenses() {
           </div>
           <div className="relative group">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[8px] font-black text-text-dim uppercase tracking-tighter pointer-events-none">TO:</span>
-            <input 
+            <input
               type="date"
               value={dateRange.end}
               onChange={e => setDateRange({...dateRange, end: e.target.value})}
@@ -243,7 +243,7 @@ export function Expenses() {
           </div>
         </div>
       </div>
-      
+
       {/* Treasury Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="glass-panel p-8 rounded-[2rem] border-white/5 relative overflow-hidden group">
@@ -257,7 +257,7 @@ export function Expenses() {
              </span>
           </div>
         </div>
-        
+
         <div className="glass-panel p-8 rounded-[2rem] border-white/5 relative overflow-hidden group">
           <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 blur-3xl -mr-16 -mt-16 group-hover:bg-red-500/10 transition-colors" />
           <p className="text-[10px] font-black text-text-dim uppercase tracking-[0.3em] mb-3">Total Expenditure</p>
@@ -291,7 +291,7 @@ export function Expenses() {
       {/* Burn Rate Heatmap */}
       <section className="grid grid-cols-2 lg:grid-cols-6 gap-4">
         {categoryStats.map(stat => (
-          <motion.div 
+          <motion.div
             key={stat.name}
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -301,7 +301,7 @@ export function Expenses() {
               stat.revenueShare > 30 ? "border-red-500/30" : "border-white/5"
             )}
           >
-            <div 
+            <div
               className="absolute inset-0 pointer-events-none opacity-20 group-hover:opacity-40 transition-opacity duration-1000"
               style={{
                 background: `radial-gradient(circle at center, ${stat.revenueShare > 30 ? '#ef4444' : '#39ff14'} 0%, transparent ${Math.min(100, stat.revenueShare * 2 + 30)}%)`,
@@ -324,7 +324,7 @@ export function Expenses() {
                 </div>
               </div>
               <div className="h-1 w-full bg-text-main/5 rounded-full overflow-hidden">
-                <motion.div 
+                <motion.div
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(100, stat.revenueShare)}%` }}
                   className={cn(
@@ -341,7 +341,7 @@ export function Expenses() {
       {/* Unit Trace Visualization */}
       <AnimatePresence>
         {tracedTag && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, height: 0, marginBottom: 0 }}
             animate={{ opacity: 1, height: 'auto', marginBottom: 24 }}
             exit={{ opacity: 0, height: 0, marginBottom: 0 }}
@@ -363,7 +363,7 @@ export function Expenses() {
                   <p className="text-lg font-black text-accent-green tabular-nums">KSh {filteredExpenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()}</p>
                 </div>
               </div>
-              
+
               <div className="h-64 w-full">
                 <TraceTrendChart tag={tracedTag} expenses={expenses || []} />
               </div>
@@ -380,9 +380,9 @@ export function Expenses() {
           <tr key={expense.id} className="hover:bg-text-main/[0.02] transition-colors group text-text-main">
             <td className="px-8 py-6">
               <span className={cn(
-                "text-[8px] font-black px-2 py-0.5 rounded-full border tracking-widest uppercase", 
-                expense.synced 
-                  ? "border-accent-green/20 bg-accent-green/10 text-accent-green shadow-neon" 
+                "text-[8px] font-black px-2 py-0.5 rounded-full border tracking-widest uppercase",
+                expense.synced
+                  ? "border-accent-green/20 bg-accent-green/10 text-accent-green shadow-neon"
                   : "border-text-main/10 bg-text-main/5 text-text-dim"
               )}>
                 {expense.synced ? "Synced" : "Local"}
@@ -409,12 +409,12 @@ export function Expenses() {
             <td className="px-8 py-6 text-right font-black text-sm text-accent-green drop-shadow-[0_0_8px_rgba(57,255,20,0.3)] tabular-nums">KSh {expense.amount.toLocaleString()}</td>
             <td className="px-8 py-6 text-center">
               {expense.sub_tag && (
-                <button 
+                <button
                   onClick={() => setTracedTag(expense.sub_tag || null)}
                   className={cn(
                     "p-2 rounded-xl transition-all",
-                    tracedTag === expense.sub_tag 
-                      ? "bg-accent-green text-bg-deep shadow-neon scale-110" 
+                    tracedTag === expense.sub_tag
+                      ? "bg-accent-green text-bg-deep shadow-neon scale-110"
                       : "bg-text-main/5 text-text-dim hover:bg-accent-green/10 hover:text-accent-green"
                   )}
                 >
@@ -424,13 +424,13 @@ export function Expenses() {
             </td>
             <td className="px-8 py-6 text-right">
               <div className="flex items-center justify-end gap-2">
-                <button 
+                <button
                   onClick={() => handleEdit(expense)}
                   className="p-2 rounded-lg bg-text-main/5 hover:bg-accent-green/10 text-text-dim hover:text-accent-green transition-all"
                 >
                   <Edit2 className="w-3.5 h-3.5" />
                 </button>
-                <button 
+                <button
                   onClick={() => handleDelete(expense)}
                   className="p-2 rounded-lg bg-text-main/5 hover:bg-red-500/10 text-text-dim hover:text-red-500 transition-all"
                 >
@@ -444,7 +444,7 @@ export function Expenses() {
 
       <AnimatePresence>
         {deletingExpense && (
-          <ConfirmationModal 
+          <ConfirmationModal
             onConfirm={confirmDelete}
             onCancel={() => setDeletingExpense(null)}
             title="Expunge Entry"
@@ -457,22 +457,18 @@ export function Expenses() {
       <div className="md:hidden fixed bottom-6 left-6 right-6 z-50">
         <QuickLogBar onSave={async (exp) => {
           const payload = { ...exp, date: new Date().toISOString().split('T')[0], synced: false } as Expense;
-          if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
-            await pb.collection('expenses').create(payload);
-          } else {
-            await addEntity('expenses', payload);
-          }
+          await addEntity('expenses', payload);
         }} />
       </div>
 
       <AnimatePresence>
         {isModalOpen && (
-          <ExpenseModal 
+          <ExpenseModal
             onClose={() => {
               setIsModalOpen(false);
               setEditingExpense(null);
-            }} 
-            editingExpense={editingExpense} 
+            }}
+            editingExpense={editingExpense}
           />
         )}
       </AnimatePresence>
@@ -500,34 +496,34 @@ function TraceTrendChart({ tag, expenses }: { tag: string, expenses: Expense[] }
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={chartData} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
-        <XAxis 
-          dataKey="name" 
-          stroke="#94a3b8" 
-          fontSize={10} 
-          fontWeight="bold" 
-          axisLine={false} 
+        <XAxis
+          dataKey="name"
+          stroke="#94a3b8"
+          fontSize={10}
+          fontWeight="bold"
+          axisLine={false}
           tickLine={false}
           dy={10}
         />
-        <YAxis 
-          stroke="#94a3b8" 
-          fontSize={10} 
-          fontWeight="bold" 
-          axisLine={false} 
+        <YAxis
+          stroke="#94a3b8"
+          fontSize={10}
+          fontWeight="bold"
+          axisLine={false}
           tickLine={false}
           tickFormatter={(val) => `KSh ${val.toLocaleString()}`}
         />
-        <Tooltip 
+        <Tooltip
           contentStyle={{ backgroundColor: '#1a1a1a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: '10px', color: '#fff' }}
           itemStyle={{ color: '#39ff14', fontWeight: 'bold' }}
           cursor={{ stroke: '#39ff1430', strokeWidth: 2 }}
         />
-        <Line 
-          type="monotone" 
-          dataKey="amount" 
-          stroke="#39ff14" 
-          strokeWidth={4} 
-          dot={{ fill: '#39ff14', r: 6, strokeWidth: 0 }} 
+        <Line
+          type="monotone"
+          dataKey="amount"
+          stroke="#39ff14"
+          strokeWidth={4}
+          dot={{ fill: '#39ff14', r: 6, strokeWidth: 0 }}
           activeDot={{ r: 8, stroke: '#121212', strokeWidth: 3 }}
           animationDuration={1000}
         />
@@ -566,7 +562,7 @@ function QuickLogBar({ onSave }: { onSave: (exp: Partial<Expense>) => Promise<vo
     <div className="glass-panel overflow-hidden border-accent-green/20 rounded-2xl shadow-[0_0_40px_rgba(0,0,0,0.5)]">
       <AnimatePresence mode="wait">
         {!activeQuickLog ? (
-          <motion.div 
+          <motion.div
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -20, opacity: 0 }}
@@ -583,7 +579,7 @@ function QuickLogBar({ onSave }: { onSave: (exp: Partial<Expense>) => Promise<vo
             ))}
           </motion.div>
         ) : (
-          <motion.div 
+          <motion.div
             initial={{ y: 20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: -20, opacity: 0 }}
@@ -597,7 +593,7 @@ function QuickLogBar({ onSave }: { onSave: (exp: Partial<Expense>) => Promise<vo
                 <button onClick={() => setActiveQuickLog(null)}><X className="w-3.5 h-3.5 text-text-dim" /></button>
              </div>
              <div className="flex gap-2">
-                <input 
+                <input
                   type="number"
                   autoFocus
                   value={amount}
@@ -605,7 +601,7 @@ function QuickLogBar({ onSave }: { onSave: (exp: Partial<Expense>) => Promise<vo
                   placeholder="KSh..."
                   className="flex-1 bg-text-main/5 border border-text-main/10 rounded-xl px-4 py-2 text-xs font-black text-accent-green outline-none focus:border-accent-green"
                 />
-                <button 
+                <button
                   onClick={handleQuickSave}
                   disabled={isSaving || !amount}
                   className="px-6 rounded-xl bg-accent-green text-bg-deep text-[10px] font-black uppercase tracking-widest shadow-neon"
@@ -656,16 +652,16 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
       showToast('Please enter a valid amount', 'error');
       return;
     }
-    
+
     setIsSaving(true);
     onClose(); // ULTIMATE OPTIMISTIC CLOSE: Vanish instantly
-    
+
     try {
-      const payload: any = { 
-        ...formData, 
-        amount: currentAmount, 
-        tax_amount: parseFloat(formData.tax_amount) || 0, 
-        synced: false 
+      const payload: any = {
+        ...formData,
+        amount: currentAmount,
+        tax_amount: parseFloat(formData.tax_amount) || 0,
+        synced: false
       };
 
       if (!payload.client_id) {
@@ -673,42 +669,20 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
       }
 
       if (editingExpense) {
-        const isPbMode = import.meta.env.VITE_AUTH_MODE === 'pocketbase';
         const targetId = (editingExpense as any).id;
-        const pbId = typeof targetId === 'string' ? targetId : editingExpense.pb_id;
 
-        // 1. Update Local Dexie
         if (typeof targetId === 'number') {
-          db.expenses.update(targetId, payload);
+          await updateEntity('expenses', targetId, payload);
         } else if (typeof targetId === 'string') {
-          db.expenses.where('pb_id').equals(targetId).first().then(local => {
-            if (local?.id) db.expenses.update(local.id, payload);
-          });
-        }
-
-        // 2. Update PocketBase (Background)
-        if (isPbMode && isOnline && pbId) {
-          pb.collection('expenses').update(pbId, payload).catch(err => {
-             console.error('Background Update Sync Error:', err);
-          });
+          const local = await db.expenses.where('pb_id').equals(targetId).first();
+          if (local?.id) {
+            await updateEntity('expenses', local.id, payload);
+          }
         }
         showToast('Expenditure record updated', 'success');
       } else {
-        // Create Logic
-        db.expenses.add(payload).then(localId => {
-          showToast('Expenditure record created', 'success');
-          
-          if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
-            pb.collection('expenses').create(payload).then(record => {
-              db.expenses.update(localId, { pb_id: record.id });
-            }).catch(err => {
-              console.error('Background Create Sync Error:', err);
-            });
-          }
-        }).catch(err => {
-          console.error('Local Create Error:', err);
-          showToast('Failed to save record locally', 'error');
-        });
+        await addEntity('expenses', payload);
+        showToast('Expenditure record created', 'success');
       }
     } catch (err: any) {
       console.error('Failed to save expense:', err);
@@ -721,15 +695,15 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
         className="absolute inset-0 bg-bg-deep/90 backdrop-blur-[10px]"
       />
-      
-      <motion.div 
+
+      <motion.div
         initial={{ scale: 0.9, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -755,7 +729,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
             <div className="flex justify-between items-end px-1">
                <label className="text-[9px] font-black text-text-dim uppercase tracking-widest">Quantum Allocation (KSh)</label>
                {isHighSpend && (
-                 <motion.div 
+                 <motion.div
                    animate={{ x: [0, -5, 5, -5, 5, 0] }}
                    className="flex items-center gap-2 px-3 py-1 bg-[#ffdb00]/10 border border-[#ffdb00]/30 rounded-full"
                  >
@@ -769,7 +743,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                 "absolute left-6 top-1/2 -translate-y-1/2 text-2xl font-black transition-colors duration-500",
                 isHighSpend ? "text-[#ffdb00]" : "text-accent-green"
               )}>KSh</span>
-              <input 
+              <input
                 type="number"
                 required
                 autoFocus
@@ -778,18 +752,18 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                 placeholder="0.00"
                 className={cn(
                   "w-full bg-bg-deep rounded-[2rem] py-10 pl-24 pr-10 text-6xl font-black focus:outline-none transition-all duration-500 border-2 uppercase",
-                  isHighSpend 
-                    ? "border-[#ffdb00] text-[#ffdb00] shadow-[0_0_30px_rgba(255,219,0,0.1)] outline-[#ffdb00]/20" 
+                  isHighSpend
+                    ? "border-[#ffdb00] text-[#ffdb00] shadow-[0_0_30px_rgba(255,219,0,0.1)] outline-[#ffdb00]/20"
                     : "border-accent-green/30 text-accent-green focus:border-accent-green focus:shadow-[0_0_40px_rgba(57,255,20,0.1)]"
                 )}
               />
                <div className="absolute -bottom-1 left-8 right-8 h-1 bg-text-main/5 rounded-full overflow-hidden blur-[0.5px]">
-                  <motion.div 
+                  <motion.div
                     initial={{ width: 0 }}
                     animate={{ width: `${Math.min(100, impactPercentage)}%` }}
                     className={cn(
                         "h-full transition-colors duration-500",
-                        impactPercentage > 85 ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : 
+                        impactPercentage > 85 ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" :
                         impactPercentage > 50 ? "bg-[#ffdb00]" : "bg-accent-green shadow-neon"
                     )}
                   />
@@ -805,7 +779,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
             <div className="space-y-6">
               <div className="space-y-3">
                 <label className="text-[9px] font-black text-text-dim uppercase tracking-widest pl-1">Target Client Assignment</label>
-                <select 
+                <select
                   value={formData.client_id}
                   onChange={e => setFormData({...formData, client_id: e.target.value})}
                   className="w-full bg-bg-deep border border-text-main/10 rounded-xl py-4 px-4 text-xs font-bold text-text-main focus:outline-none focus:border-accent-green uppercase"
@@ -821,7 +795,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                 <label className="text-[9px] font-black text-text-dim uppercase tracking-widest pl-1">Tax Component (KSh)</label>
                 <div className="relative">
                   <Hash className="absolute left-4 top-1/2 -translate-y-1/2 w-3 h-3 text-text-dim opacity-30" />
-                  <input 
+                  <input
                     type="number"
                     value={formData.tax_amount}
                     onChange={e => setFormData({...formData, tax_amount: e.target.value})}
@@ -841,8 +815,8 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                       onClick={() => setFormData({...formData, category: v, sub_tag: ''})}
                       className={cn(
                         "py-3 px-4 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all border",
-                        formData.category === v 
-                          ? "bg-accent-green text-bg-deep border-accent-green shadow-neon" 
+                        formData.category === v
+                          ? "bg-accent-green text-bg-deep border-accent-green shadow-neon"
                           : "bg-text-main/5 text-text-dim border-text-main/5 hover:bg-text-main/10"
                       )}
                     >
@@ -853,7 +827,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
               </div>
 
               <AnimatePresence mode="wait">
-                <motion.div 
+                <motion.div
                   key={formData.category}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -869,8 +843,8 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                         onClick={() => setFormData({...formData, sub_tag: tag})}
                         className={cn(
                           "px-4 py-2 rounded-lg text-[8px] font-black uppercase tracking-widest transition-all border",
-                          formData.sub_tag === tag 
-                            ? "bg-text-main/10 text-accent-green border-accent-green/50 shadow-[0_0_15px_rgba(57,255,20,0.2)]" 
+                          formData.sub_tag === tag
+                            ? "bg-text-main/10 text-accent-green border-accent-green/50 shadow-[0_0_15px_rgba(57,255,20,0.2)]"
                             : "bg-text-main/[0.02] text-text-dim border-text-main/5 hover:border-text-main/20"
                         )}
                       >
@@ -882,7 +856,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                     <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
                       <Search className="w-3 h-3 text-text-dim opacity-30 group-focus-within:text-accent-green transition-colors" />
                     </div>
-                    <input 
+                    <input
                       type="text"
                       value={formData.sub_tag}
                       onChange={e => setFormData({...formData, sub_tag: e.target.value})}
@@ -897,7 +871,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
             <div className="space-y-6">
                <div className="space-y-2">
                 <label className="text-[9px] font-black text-text-dim uppercase tracking-widest ml-1">Allocation Description</label>
-                <textarea 
+                <textarea
                   required
                   value={formData.description}
                   onChange={e => setFormData({...formData, description: e.target.value})}
@@ -909,7 +883,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
 
               <div className="space-y-2">
                 <label className="text-[9px] font-black text-text-dim uppercase tracking-widest ml-1">Debit Date</label>
-                <input 
+                <input
                   type="date"
                   required
                   value={formData.date}
@@ -925,7 +899,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
 
           <div className="flex items-center justify-between pt-10 border-t border-white/5">
             <span className="text-[8px] font-black text-text-dim uppercase tracking-[.4rem] opacity-40 italic">Handshake Pending</span>
-            <button 
+            <button
               type="submit"
               disabled={isSaving}
               className="px-14 py-5 bg-accent-green text-bg-deep rounded-2xl font-black uppercase tracking-[.2rem] text-[11px] shadow-neon hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
@@ -943,21 +917,21 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
 function ConfirmationModal({ onConfirm, onCancel, title, message }: { onConfirm: () => void, onCancel: () => void, title: string, message: string }) {
   return (
     <div className="fixed inset-0 z-[500] flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onCancel}
         className="absolute inset-0 bg-bg-deep/95 backdrop-blur-xl"
       />
-      <motion.div 
+      <motion.div
         initial={{ scale: 0.9, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.9, opacity: 0, y: 20 }}
         className="relative w-full max-w-md bg-bg-deep/50 border border-red-500/30 rounded-[3rem] p-12 text-center shadow-[0_0_100px_rgba(239,68,68,0.2)] overflow-hidden"
       >
         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-red-500 to-transparent" />
-        
+
         <div className="w-20 h-20 rounded-3xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-8 relative">
           <div className="absolute inset-0 bg-red-500/20 blur-2xl animate-pulse rounded-full" />
           <AlertTriangle className="w-10 h-10 text-red-500 relative z-10" />
@@ -969,7 +943,7 @@ function ConfirmationModal({ onConfirm, onCancel, title, message }: { onConfirm:
         </p>
 
         <div className="grid grid-cols-1 gap-4">
-          <button 
+          <button
             type="button"
             onClick={() => {
               console.log("Confirmation initiated");
@@ -979,7 +953,7 @@ function ConfirmationModal({ onConfirm, onCancel, title, message }: { onConfirm:
           >
             Confirm & Expunge
           </button>
-          <button 
+          <button
             type="button"
             onClick={onCancel}
             className="w-full py-5 rounded-2xl border border-white/10 text-[10px] font-black text-text-dim uppercase tracking-widest hover:bg-white/5 transition-all active:scale-95"

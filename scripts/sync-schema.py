@@ -1,10 +1,11 @@
+import os
 import requests
 import json
 import time
 
 URL = "https://code-rafiki.pockethost.io"
-EMAIL = "aturaerick@gmail.com"
-PASSWORD = "dGY@SrzA86PQc5n"
+EMAIL = os.environ["POCKETBASE_ADMIN_EMAIL"]
+PASSWORD = os.environ["POCKETBASE_ADMIN_PASSWORD"]
 
 def get_token():
     for _ in range(5):

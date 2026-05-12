@@ -2,18 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type TeamMember, type BusinessProfile } from '../db/db';
 import { pb } from '../lib/pocketbase';
-import { 
-  Users, 
-  Moon, 
-  Sun, 
-  Building2, 
-  Activity, 
-  Bell, 
-  Trash2, 
-  Plus, 
-  Save, 
-  Shield, 
-  Monitor, 
+import {
+  Users,
+  Moon,
+  Sun,
+  Building2,
+  Activity,
+  Bell,
+  Trash2,
+  Plus,
+  Save,
+  Shield,
+  Monitor,
   Settings as SettingsIcon,
   Wifi,
   WifiOff,
@@ -28,7 +28,8 @@ import {
   Unlock,
   ShieldAlert,
   Image as ImageIcon,
-  Upload
+  Upload,
+  X
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
@@ -38,14 +39,15 @@ import { useToast } from '../contexts/ToastContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { addMonths } from 'date-fns';
 import { usePbCollection } from '../hooks/usePbCollection';
+import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
 
 export function Settings() {
   const { theme, setTheme } = useTheme();
-  const { addEntity, isOnline } = useSync();
+  const { addEntity, isOnline, rebuildSyncQueue, processSyncQueue } = useSync();
   const { showToast } = useToast();
   const teamMembers = useLiveQuery(() => db.team_members.toArray());
   const business = useLiveQuery(() => db.business.limit(1).toArray());
-  const instances = useLiveQuery(() => db.pocket_host_instances.toArray());
+  const { data: instances } = useUnifiedCollection<any>('pocket_host_instances', () => db.pocket_host_instances.toArray());
   const { currentUser, updateProfile } = useAuth();
 
   // My Profile State
@@ -92,6 +94,20 @@ export function Settings() {
 
   // SW Status
   const [swStatus, setSwStatus] = useState<'active' | 'inactive' | 'checking'>('checking');
+  const [isRepairingSync, setIsRepairingSync] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<{
+    visible: boolean;
+    status: 'running' | 'success' | 'error';
+    title: string;
+    message: string;
+    progress: number;
+  }>({
+    visible: false,
+    status: 'running',
+    title: '',
+    message: '',
+    progress: 0
+  });
 
   const MODULES = [
     { id: 'dashboard', label: 'Dashboard' },
@@ -113,13 +129,13 @@ export function Settings() {
 
     const allModules = MODULES.map(m => m.id);
     let perms = user.module_permissions || [...allModules];
-    
+
     if (perms.includes(moduleId)) {
       perms = perms.filter((m: string) => m !== moduleId);
     } else {
       perms = [...perms, moduleId];
     }
-    
+
     if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
       try {
         await pb.collection('users').update(user.id, { module_permissions: perms });
@@ -162,7 +178,7 @@ export function Settings() {
         setBizLogo(business[0].logo_base64);
       }
     }
-    
+
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.ready.then(() => setSwStatus('active'));
     } else {
@@ -173,7 +189,7 @@ export function Settings() {
   const handleBulkProvision = async () => {
     if (!stockPrefix || !stockCount) return;
     setIsProvisioning(true);
-    
+
     const count = parseInt(stockCount);
     for (let i = 1; i <= count; i++) {
       const idx = (instances?.length || 0) + i;
@@ -195,12 +211,12 @@ export function Settings() {
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userName || !userEmail) return;
-    
+
     if (userPassword !== confirmPassword) {
       showToast('Passwords do not match', 'error');
       return;
     }
-    
+
     if (editingId) {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
         try {
@@ -261,7 +277,7 @@ export function Settings() {
         });
       }
     }
-    
+
     setUserName('');
     setUserEmail('');
     setUserPassword('');
@@ -304,14 +320,14 @@ export function Settings() {
     try {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
         const pbData = { name: bizName, till_number: bizTill, currency: bizCurrency, logo_base64: bizLogo };
-        
+
         // 1. Try to find existing record in PB regardless of local pb_id
         const records = await pb.collection('business').getFullList({ requestKey: 'save-biz' });
-        
+
         if (records.length > 0) {
           const pbId = records[0].id;
           await pb.collection('business').update(pbId, pbData);
-          
+
           // Update local DB
           const localBiz = await db.business.toCollection().first();
           if (localBiz) {
@@ -362,6 +378,64 @@ export function Settings() {
       await db.delete();
       localStorage.clear();
       window.location.reload();
+    }
+  };
+
+  const handleRepairSync = async () => {
+    if (isRepairingSync) return;
+    if (!confirm('This will re-examine all local records and re-queue any data that hasn\'t successfully reached the cloud. Continue?')) return;
+
+    setIsRepairingSync(true);
+    setSyncNotice({
+      visible: true,
+      status: 'running',
+      title: 'Cloud Integrity Repair',
+      message: 'Preparing local audit...',
+      progress: 8
+    });
+
+    try {
+      setSyncNotice(prev => ({ ...prev, message: 'Scanning local records for cloud gaps...', progress: 32 }));
+      const reQueued = await rebuildSyncQueue({
+        verifyCloud: true,
+        collections: ['pocket_host_instances', 'clients', 'payments', 'expenses', 'billing_promises', 'agreements', 'meetings']
+      });
+
+      setSyncNotice(prev => ({
+        ...prev,
+        message: reQueued > 0 ? `Queued ${reQueued} local records for cloud upload...` : 'No missing local records found in this browser. Verifying sync queue...',
+        progress: 68
+      }));
+      const syncSummary = await processSyncQueue();
+
+      if (syncSummary?.failed) {
+        throw new Error('PocketBase rejected some records. Confirm the cloud collection exists, then run repair again.');
+      }
+
+      setSyncNotice({
+        visible: true,
+        status: 'success',
+        title: 'Sync Repair Complete',
+        message: syncSummary?.processed
+          ? `${syncSummary.processed} local records were pushed to the cloud.`
+          : reQueued > 0 ? `${reQueued} records were queued for the next sync pass.` : 'Local records are aligned with the sync queue.',
+        progress: 100
+      });
+      showToast(`Repair complete! Re-queued ${reQueued} items.`, 'success');
+      window.setTimeout(() => {
+        setSyncNotice(prev => prev.status === 'success' ? { ...prev, visible: false } : prev);
+      }, 5000);
+    } catch (error: any) {
+      setSyncNotice({
+        visible: true,
+        status: 'error',
+        title: 'Sync Repair Failed',
+        message: error?.message || 'The cloud repair could not complete.',
+        progress: 100
+      });
+      showToast('Sync repair failed', 'error');
+    } finally {
+      setIsRepairingSync(false);
     }
   };
 
@@ -433,8 +507,8 @@ export function Settings() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <label className="text-[9px] font-black text-text-dim uppercase tracking-widest ml-1">Naming Prefix</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={stockPrefix}
                     onChange={e => setStockPrefix(e.target.value)}
                     className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -442,15 +516,15 @@ export function Settings() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-[9px] font-black text-text-dim uppercase tracking-widest ml-1">Units to Add</label>
-                  <input 
-                    type="number" 
+                  <input
+                    type="number"
                     value={stockCount}
                     onChange={e => setStockCount(e.target.value)}
                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-xs font-bold text-text-main focus:border-accent-green outline-none"
                   />
                 </div>
               </div>
-              <button 
+              <button
                 onClick={handleBulkProvision}
                 disabled={isProvisioning || parseInt(stockCount) <= 0}
                 className="w-full bg-accent-green text-bg-deep py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:scale-105 transition-all flex items-center justify-center gap-2 disabled:opacity-30 disabled:grayscale"
@@ -471,16 +545,16 @@ export function Settings() {
 
           <form onSubmit={handleAddUser} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <input 
-                type="text" 
-                placeholder="Full Name" 
+              <input
+                type="text"
+                placeholder="Full Name"
                 value={userName}
                 onChange={e => setUserName(e.target.value)}
                 className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
               />
-              <input 
-                type="email" 
-                placeholder="Email Address" 
+              <input
+                type="email"
+                placeholder="Email Address"
                 value={userEmail}
                 onChange={e => setUserEmail(e.target.value)}
                 className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -488,9 +562,9 @@ export function Settings() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1">
-                <input 
-                  type="password" 
-                  placeholder={editingId ? "New Password (Optional)" : "Password"} 
+                <input
+                  type="password"
+                  placeholder={editingId ? "New Password (Optional)" : "Password"}
                   value={userPassword}
                   onChange={e => setUserPassword(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -504,16 +578,16 @@ export function Settings() {
                   </div>
                 )}
               </div>
-              <input 
-                type="password" 
-                placeholder="Confirm Password" 
+              <input
+                type="password"
+                placeholder="Confirm Password"
                 value={confirmPassword}
                 onChange={e => setConfirmPassword(e.target.value)}
                 className="bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
               />
             </div>
             <div className="flex flex-col sm:flex-row gap-4">
-              <select 
+              <select
                 value={userRole}
                 onChange={e => setUserRole(e.target.value as any)}
                 className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -557,8 +631,8 @@ export function Settings() {
                         <td className="py-4 text-right">
                           <div className="flex items-center justify-end gap-2">
                             {currentUser?.role === 'Admin' && (
-                              <button 
-                                onClick={() => setExpandedId(expandedId === u.id ? null : u.id!)} 
+                              <button
+                                onClick={() => setExpandedId(expandedId === u.id ? null : u.id!)}
                                 className="p-2 hover:text-accent-green transition-colors"
                                 title="Module Permissions"
                               >
@@ -604,7 +678,7 @@ export function Settings() {
                                   {MODULES.map(mod => {
                                     const hasAccess = u.role === 'Admin' || (u.module_permissions ? u.module_permissions.includes(mod.id) : true);
                                     const isLocked = u.role === 'Admin';
-                                    
+
                                     return (
                                       <button
                                         key={mod.id}
@@ -612,8 +686,8 @@ export function Settings() {
                                         onClick={() => handleTogglePermission(u, mod.id)}
                                         className={cn(
                                           "px-3 py-1.5 rounded-full text-[9px] font-black uppercase tracking-widest border transition-all flex items-center gap-2",
-                                          hasAccess 
-                                            ? "bg-accent-green/10 text-accent-green border-accent-green/20" 
+                                          hasAccess
+                                            ? "bg-accent-green/10 text-accent-green border-accent-green/20"
                                             : "bg-red-500/10 text-red-500 border-red-500/20 opacity-50 hover:opacity-100",
                                           isLocked && "opacity-50 cursor-not-allowed"
                                         )}
@@ -648,10 +722,10 @@ export function Settings() {
                     </div>
                     {expandedId === u.id ? <ChevronUp className="w-4 h-4 text-text-dim" /> : <ChevronDown className="w-4 h-4 text-text-dim" />}
                   </div>
-                  
+
                   <AnimatePresence>
                     {expandedId === u.id && (
-                      <motion.div 
+                      <motion.div
                         initial={{ height: 0, opacity: 0 }}
                         animate={{ height: 'auto', opacity: 1 }}
                         exit={{ height: 0, opacity: 0 }}
@@ -674,7 +748,7 @@ export function Settings() {
                             Remove
                           </button>
                         </div>
-                        
+
                         {/* Mobile Permissions Panel */}
                         {currentUser?.role === 'Admin' && (
                           <div className="mt-4 pt-4 border-t border-white/5">
@@ -686,7 +760,7 @@ export function Settings() {
                                 {MODULES.map(mod => {
                                   const hasAccess = u.role === 'Admin' || (u.module_permissions ? u.module_permissions.includes(mod.id) : true);
                                   const isLocked = u.role === 'Admin';
-                                  
+
                                   return (
                                     <button
                                       key={mod.id}
@@ -694,8 +768,8 @@ export function Settings() {
                                       onClick={() => handleTogglePermission(u, mod.id)}
                                       className={cn(
                                         "px-2 py-1.5 rounded-lg text-[8px] font-black uppercase tracking-widest border transition-all flex items-center gap-1",
-                                        hasAccess 
-                                          ? "bg-accent-green/10 text-accent-green border-accent-green/20" 
+                                        hasAccess
+                                          ? "bg-accent-green/10 text-accent-green border-accent-green/20"
                                           : "bg-red-500/10 text-red-500 border-red-500/20 opacity-50 hover:opacity-100",
                                         isLocked && "opacity-50 cursor-not-allowed"
                                       )}
@@ -726,8 +800,8 @@ export function Settings() {
           <div className="space-y-6">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Business Legal Name</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={bizName}
                 onChange={e => setBizName(e.target.value)}
                 className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -739,7 +813,7 @@ export function Settings() {
                 {bizLogo ? (
                   <div className="w-16 h-16 rounded-xl border border-white/10 overflow-hidden shrink-0 bg-white/5 relative group">
                     <img src={bizLogo} alt="Logo" className="w-full h-full object-cover" />
-                    <button 
+                    <button
                       onClick={() => setBizLogo('')}
                       className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                     >
@@ -759,7 +833,7 @@ export function Settings() {
                     className="hidden"
                     onChange={handleLogoUpload}
                   />
-                  <label 
+                  <label
                     htmlFor="logo-upload"
                     className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black text-text-main uppercase tracking-widest hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer"
                   >
@@ -773,8 +847,8 @@ export function Settings() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Mpesa Till/Paybill</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={bizTill}
                   onChange={e => setBizTill(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none font-mono"
@@ -782,7 +856,7 @@ export function Settings() {
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Currency Unit</label>
-                <select 
+                <select
                   value={bizCurrency}
                   onChange={e => setBizCurrency(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
@@ -794,7 +868,7 @@ export function Settings() {
                 </select>
               </div>
             </div>
-            <button 
+            <button
               onClick={handleSaveBusiness}
               disabled={isSavingBiz}
               className="w-full bg-white/5 text-text-main border border-white/10 py-4 rounded-xl font-black text-[10px] uppercase tracking-[0.2em] hover:border-accent-green transition-all flex items-center justify-center gap-2"
@@ -807,7 +881,7 @@ export function Settings() {
           {/* Success Toast */}
           <AnimatePresence>
             {showBizToast && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
@@ -828,7 +902,7 @@ export function Settings() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <button 
+            <button
               onClick={() => setTheme('dark')}
               className={cn(
                 "p-6 rounded-2xl border flex flex-col items-center gap-4 transition-all",
@@ -838,7 +912,7 @@ export function Settings() {
               <Moon className="w-6 h-6" />
               <span className="text-[10px] font-black uppercase tracking-widest">Dark Mode</span>
             </button>
-            <button 
+            <button
               onClick={() => setTheme('light')}
               className={cn(
                 "p-6 rounded-2xl border flex flex-col items-center gap-4 transition-all",
@@ -884,7 +958,7 @@ export function Settings() {
             <div className="p-6 glass-panel rounded-2xl bg-red-500/5 border-red-500/20 group hover:border-red-500/40 transition-all">
                <h4 className="text-[10px] font-black text-red-500 uppercase tracking-widest mb-2">Reset App Data</h4>
                <p className="text-[9px] text-text-dim uppercase leading-relaxed mb-4">Clear all locally stored data and restart the app fresh</p>
-               <button 
+               <button
                 onClick={handleClearCache}
                 className="flex items-center gap-2 text-red-500 text-[10px] font-black uppercase tracking-widest"
                >
@@ -894,9 +968,17 @@ export function Settings() {
             </div>
             <div className="p-6 glass-panel rounded-2xl bg-accent-green/5 border-accent-green/20">
                <h4 className="text-[10px] font-black text-accent-green uppercase tracking-widest mb-2">Sync Consistency</h4>
-               <p className="text-[9px] text-text-dim uppercase leading-relaxed mb-4">The sync engine automatically propagates changes when network link is restored.</p>
+               <p className="text-[9px] text-text-dim uppercase leading-relaxed mb-4">Re-examine local records and push any orphaned data to the cloud.</p>
+               <button
+                onClick={handleRepairSync}
+                disabled={isRepairingSync}
+                className="flex items-center gap-2 text-accent-green text-[10px] font-black uppercase tracking-widest hover:underline mb-4 disabled:opacity-50 disabled:cursor-wait"
+               >
+                 {isRepairingSync ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+                 {isRepairingSync ? 'Repair In Progress' : 'Repair Cloud Integrity'}
+               </button>
                <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden mt-4">
-                 <motion.div 
+                 <motion.div
                     animate={{ x: [-100, 400] }}
                     transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
                     className="w-1/4 h-full bg-accent-green shadow-neon"
@@ -906,6 +988,96 @@ export function Settings() {
           </div>
         </div>
       </div>
+
+      <SystemSyncNotice
+        notice={syncNotice}
+        onClose={() => setSyncNotice(prev => ({ ...prev, visible: false }))}
+      />
     </div>
+  );
+}
+
+function SystemSyncNotice({
+  notice,
+  onClose
+}: {
+  notice: {
+    visible: boolean;
+    status: 'running' | 'success' | 'error';
+    title: string;
+    message: string;
+    progress: number;
+  };
+  onClose: () => void;
+}) {
+  const Icon = notice.status === 'success' ? CheckCircle2 : notice.status === 'error' ? ShieldAlert : Loader2;
+
+  return (
+    <AnimatePresence>
+      {notice.visible && (
+        <motion.div
+          initial={{ opacity: 0, y: 24, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 12, scale: 0.96 }}
+          transition={{ duration: 0.25, ease: 'easeOut' }}
+          className="fixed bottom-24 right-4 left-4 lg:left-auto lg:right-8 lg:bottom-8 z-[120] pointer-events-auto"
+        >
+          <div className={cn(
+            "glass-panel !bg-bg-deep/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl p-5 w-full lg:w-[360px] overflow-hidden",
+            notice.status === 'success' && "border-accent-green/30",
+            notice.status === 'error' && "border-red-500/30"
+          )}>
+            <div className="flex items-start gap-4">
+              <div className={cn(
+                "w-10 h-10 rounded-xl flex items-center justify-center border shrink-0",
+                notice.status === 'success' && "bg-accent-green/10 border-accent-green/30 text-accent-green",
+                notice.status === 'error' && "bg-red-500/10 border-red-500/30 text-red-500",
+                notice.status === 'running' && "bg-blue-500/10 border-blue-500/30 text-blue-400"
+              )}>
+                <Icon className={cn("w-5 h-5", notice.status === 'running' && "animate-spin")} />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-accent-green mb-1">System Notification</p>
+                    <h3 className="text-sm font-black uppercase tracking-widest text-text-main leading-tight">{notice.title}</h3>
+                  </div>
+                  <button
+                    onClick={onClose}
+                    className="text-text-dim hover:text-text-main transition-colors p-1 -mt-1"
+                    aria-label="Dismiss sync notification"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <p className="text-[10px] font-bold uppercase tracking-wider text-text-dim mt-3 leading-relaxed">
+                  {notice.message}
+                </p>
+
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between text-[9px] font-black uppercase tracking-widest text-text-dim">
+                    <span>Progress</span>
+                    <span className="text-accent-green">{Math.round(notice.progress)}%</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-white/5 overflow-hidden border border-white/5">
+                    <motion.div
+                      className={cn(
+                        "h-full rounded-full",
+                        notice.status === 'error' ? "bg-red-500" : "bg-accent-green shadow-neon"
+                      )}
+                      initial={false}
+                      animate={{ width: `${notice.progress}%` }}
+                      transition={{ duration: 0.4, ease: 'easeOut' }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

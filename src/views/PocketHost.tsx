@@ -12,7 +12,7 @@ import { useToast } from '../contexts/ToastContext';
 export function PocketHost() {
   const { data: instances } = useUnifiedCollection<PocketHostInstance>('pocket_host_instances', () => db.pocket_host_instances.toArray());
   const { data: clients } = useUnifiedCollection<any>('clients', () => db.clients.toArray());
-  const { addEntity, updateEntity, deleteEntity, isOnline } = useSync();
+  const { addEntity, updateEntity, deleteEntity, isOnline, processSyncQueue } = useSync();
   const { showToast } = useToast();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -69,14 +69,45 @@ export function PocketHost() {
     (c.node_id || '').toLowerCase().includes((clientSearch || '').toLowerCase())
   ).slice(0, 5);
 
+  const getInstanceName = (instance: any) => instance?.instance_name || instance?.name || '';
+  const getMonthlyFee = (instance: any) => Number(instance?.monthly_fee || 1500);
+  const isNumericId = (id: unknown): id is number => typeof id === 'number' && Number.isFinite(id);
+  const parseNumericId = (id: unknown) => {
+    if (typeof id === 'number') return Number.isFinite(id) ? id : null;
+    if (typeof id === 'string' && /^\d+$/.test(id)) return Number(id);
+    return null;
+  };
+
+  const saveRemoteInstance = async (pbId: string, data: any) => {
+    const local = await db.pocket_host_instances.where('pb_id').equals(pbId).first();
+    if (local?.id) {
+      await updateEntity('pocket_host_instances', local.id, data);
+      return;
+    }
+
+    const localId = await db.pocket_host_instances.add({
+      ...data,
+      pb_id: pbId,
+      synced: false
+    });
+
+    await db.syncQueue.add({
+      entity: 'pocket_host_instances',
+      entityId: localId,
+      operation: 'UPDATE',
+      timestamp: Date.now()
+    });
+    if (navigator.onLine) processSyncQueue();
+  };
+
   const handleOpenModal = (instance?: PocketHostInstance) => {
     if (instance) {
       setEditingInstance(instance);
       setFormData({
         selected_stock_id: instance.id || '',
-        instance_name: instance.instance_name,
+        instance_name: getInstanceName(instance),
         client_id: instance.client_id || '',
-        monthly_fee: instance.monthly_fee.toString(),
+        monthly_fee: getMonthlyFee(instance).toString(),
         billing_cycle: instance.billing_cycle || 'monthly',
         status: instance.status,
       });
@@ -113,64 +144,29 @@ export function PocketHost() {
     setIsModalOpen(false); // Optimistic close
 
     try {
-      if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
-        if (editingInstance) {
-          const targetId = (editingInstance as any).id;
-          const pbId = typeof targetId === 'string' ? targetId : editingInstance.pb_id;
-          
-          // 1. Cloud Update
-          if (pbId) {
-            await pb.collection('pocket_host_instances').update(pbId, data);
+      if (editingInstance) {
+        const targetId = (editingInstance as any).id;
+        if (isNumericId(targetId)) {
+          await updateEntity('pocket_host_instances', targetId, data);
+        } else if (typeof targetId === 'string') {
+          const local = await db.pocket_host_instances.where('pb_id').equals(targetId).first();
+          if (local?.id) {
+            await updateEntity('pocket_host_instances', local.id, data);
+          } else if (isOnline) {
+            await saveRemoteInstance(targetId, data);
           }
-          
-          // 2. Local Update
-          if (typeof targetId === 'number') {
-            await db.pocket_host_instances.update(targetId, { ...data, synced: true });
-          } else if (typeof targetId === 'string') {
-            const local = await db.pocket_host_instances.where('pb_id').equals(targetId).first();
-            if (local?.id) {
-              await db.pocket_host_instances.update(local.id, { ...data, synced: true });
-            }
-          }
-        } else if (formData.selected_stock_id) {
-          // Updating from Stock (Assignment)
-          const stockId = formData.selected_stock_id;
-          
-          // 1. Cloud Update
-          let pbId = typeof stockId === 'string' ? stockId : null;
-          if (!pbId && typeof stockId === 'number') {
-            const local = await db.pocket_host_instances.get(stockId);
-            pbId = local?.pb_id || null;
-          }
-
-          if (pbId) {
-            await pb.collection('pocket_host_instances').update(pbId, data);
-          }
-          
-          // 2. Local Update
-          if (typeof stockId === 'number') {
-            await db.pocket_host_instances.update(stockId, { ...data, synced: true });
-          } else if (typeof stockId === 'string') {
-            const local = await db.pocket_host_instances.where('pb_id').equals(stockId).first();
-            if (local?.id) {
-              await db.pocket_host_instances.update(local.id, { ...data, synced: true });
-            }
-          }
+        }
+      } else if (formData.selected_stock_id && formData.selected_stock_id !== 'new') {
+        const stockId = parseNumericId(formData.selected_stock_id);
+        if (stockId !== null) {
+          await updateEntity('pocket_host_instances', stockId, data);
+        } else if (typeof formData.selected_stock_id === 'string' && isOnline) {
+          await saveRemoteInstance(formData.selected_stock_id, data);
         } else {
-          // New Creation
-          const localId = await db.pocket_host_instances.add({ ...data, synced: false });
-          const record = await pb.collection('pocket_host_instances').create(data);
-          await db.pocket_host_instances.update(localId, { pb_id: record.id, synced: true });
+          throw new Error('Selected stock unit is not available locally. Reconnect and try again.');
         }
       } else {
-        // Offline / Dexie-only mode
-        if (editingInstance) {
-          await updateEntity('pocket_host_instances', editingInstance.id!, data);
-        } else if (formData.selected_stock_id) {
-          await updateEntity('pocket_host_instances', Number(formData.selected_stock_id), data);
-        } else {
-          await addEntity('pocket_host_instances', data);
-        }
+        await addEntity('pocket_host_instances', data);
       }
       showToast('Nodal configuration updated', 'success');
     } catch (err: any) {
@@ -659,11 +655,11 @@ export function PocketHost() {
                       value={formData.selected_stock_id}
                       onChange={e => {
                         const id = e.target.value;
-                        const stock = unassignedInstances.find(i => i.id === Number(id));
+                        const stock = unassignedInstances.find(i => String(i.id) === id);
                         setFormData({
                           ...formData, 
                           selected_stock_id: id,
-                          instance_name: stock?.instance_name || ''
+                          instance_name: getInstanceName(stock) || ''
                         });
                       }}
                       className="w-full bg-white/[0.04] border border-accent-green/30 rounded-2xl py-4 px-5 text-xs font-black text-text-main focus:outline-none focus:border-accent-green transition-all uppercase"
@@ -671,7 +667,7 @@ export function PocketHost() {
                       <option value="" disabled className="bg-bg-deep">--- Choose from Stock ---</option>
                       {unassignedInstances.map(i => (
                         <option key={i.id} value={i.id} className="bg-bg-deep">
-                          Stock Unit: {i.instance_name}
+                          Stock Unit: {getInstanceName(i)}
                         </option>
                       ))}
                       <option value="new" className="bg-bg-deep text-text-dim">--- New Manual Entry ---</option>

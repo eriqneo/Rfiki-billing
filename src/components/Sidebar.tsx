@@ -166,9 +166,17 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <p className="text-[8px] font-bold text-accent-green uppercase tracking-widest">{currentUser.role}</p>
                       <span className="text-[8px] text-text-dim">•</span>
-                      <p className={cn("text-[8px] font-bold uppercase tracking-widest", isOnline ? "text-accent-green" : "text-text-dim")}>
-                        {isOnline ? "Online" : "Offline"}
-                      </p>
+                      {pb.authStore.isValid ? (
+                        <div className="text-[8px] font-bold text-accent-green uppercase tracking-widest flex items-center gap-1">
+                          <div className="w-1 h-1 rounded-full bg-accent-green animate-pulse" />
+                          Cloud Active
+                        </div>
+                      ) : (
+                        <div className="text-[8px] font-bold text-amber-500 uppercase tracking-widest flex items-center gap-1">
+                          <div className="w-1 h-1 rounded-full bg-amber-500 animate-bounce" />
+                          Local Only
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

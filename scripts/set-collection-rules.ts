@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import PocketBase from 'pocketbase';
 
 const pb = new PocketBase('https://code-rafiki.pockethost.io');
@@ -16,7 +17,7 @@ const OPEN_COLLECTIONS = [
 ];
 
 async function setCollectionRules() {
-  await pb.collection('_superusers').authWithPassword('aturaerick@gmail.com', 'dGY@SrzA86PQc5n');
+  await pb.collection('_superusers').authWithPassword(process.env.POCKETBASE_ADMIN_EMAIL!, process.env.POCKETBASE_ADMIN_PASSWORD!);
   console.log('✅ Admin authenticated\n');
 
   for (const name of OPEN_COLLECTIONS) {

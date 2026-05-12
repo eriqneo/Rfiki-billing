@@ -299,7 +299,7 @@ interface ClientProfileModalProps {
 
 function ClientProfileModal({ onClose, editingClient }: ClientProfileModalProps) {
   const { theme } = useTheme();
-  const { addEntity, isOnline } = useSync();
+  const { addEntity, updateEntity, isOnline } = useSync();
   const { showToast } = useToast();
   const [isSaving, setIsSaving] = useState(false);
 
@@ -345,42 +345,37 @@ function ClientProfileModal({ onClose, editingClient }: ClientProfileModalProps)
       };
 
       if (editingClient) {
-        if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline && editingClient.pb_id) {
+        if (editingClient.id && typeof editingClient.id === 'number') {
+          await updateEntity('clients', editingClient.id, clientData);
+        } else if (editingClient.pb_id && isOnline) {
           await pb.collection('clients').update(editingClient.pb_id, clientData);
         }
-        await db.clients.update(editingClient.id!, clientData);
         showToast('Client profile updated successfully', 'success');
       } else {
-        if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
-          await pb.collection('clients').create(clientData);
-        } else {
-          await db.clients.add(clientData);
-        }
+        await addEntity('clients', clientData);
         
         // Auto-schedule Kick-off Meeting
         if (formData.initial_meeting) {
           const meetingStartTime = new Date(formData.initial_meeting);
           const meetingEndTime = new Date(meetingStartTime.getTime() + 60 * 60 * 1000);
           
-          await db.meetings.add({
+          await addEntity('meetings', {
             client_id: newNodeId,
             summary: `Kick-off Meeting: ${formData.name}`,
             description: `Initial project synchronization for ${formData.project_tag || 'new project'}.`,
             start_time: meetingStartTime.toISOString(),
             end_time: meetingEndTime.toISOString(),
-            type: 'Discovery',
-            synced: false
+            type: 'Discovery'
           });
         }
 
         // Auto-schedule Payment Promise
         if (formData.target_payment) {
-          await db.billing_promises.add({
+          await addEntity('billing_promises', {
             amount_due: parseFloat(formData.agreed_price) || 0,
             due_date: formData.target_payment,
             client_id: newNodeId,
-            status: 'pending',
-            synced: false
+            status: 'pending'
           });
         }
         

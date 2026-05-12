@@ -7,11 +7,11 @@ import { useToast } from '../contexts/ToastContext';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
-import { pb } from '../lib/pocketbase';
 
 export function Agreements() {
   const { theme } = useTheme();
   const { data: agreements } = useUnifiedCollection<Agreement>('agreements', () => db.agreements.toArray());
+  const { deleteEntity } = useSync();
   const [showNewModal, setShowNewModal] = useState(false);
 
   return (
@@ -76,7 +76,11 @@ export function Agreements() {
                   <Link className="w-4 h-4" />
                 </button>
               </div>
-              <button className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 text-text-dim hover:text-red-500 transition-all" title="Delete" onClick={() => a.id && db.agreements.delete(a.id)}>
+              <button
+                className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 text-text-dim hover:text-red-500 transition-all"
+                title="Delete"
+                onClick={() => typeof a.id === 'number' && deleteEntity('agreements', a.id)}
+              >
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
@@ -123,6 +127,7 @@ export function Agreements() {
 function NewAgreementModal({ onClose }: { onClose: () => void }) {
   const { theme } = useTheme();
   const { showToast } = useToast();
+  const { addEntity } = useSync();
   const [step, setStep] = useState(1);
   const [search, setSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -173,22 +178,7 @@ function NewAgreementModal({ onClose }: { onClose: () => void }) {
         synced: false
       };
 
-      if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
-        try {
-          const pbPayload = {
-            client_id: newAgreement.client_id,
-            client_name: newAgreement.client_name,
-            project_details: newAgreement.project_details,
-            created_date: newAgreement.created_date,
-            expiry_date: newAgreement.expiry_date,
-            status: newAgreement.status,
-          };
-          await pb.collection('agreements').create(pbPayload);
-        } catch (e) {
-          console.warn('PB agreements write failed, saved locally:', e);
-        }
-      }
-      await db.agreements.add(newAgreement);
+      await addEntity('agreements', newAgreement);
       showToast('Agreement saved successfully', 'success');
       onClose();
     } catch (error) {

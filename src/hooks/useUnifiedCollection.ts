@@ -12,12 +12,27 @@ export function useUnifiedCollection<T>(collectionName: string, dexieFetcher: ()
     if (!pbRecords) return dexieRecords;
     if (!dexieRecords) return pbRecords;
 
-    // Merge logic: Take all PB records, then add local records that are explicitly marked as unsynced.
-    // This provides a clean optimistic UI for new creations.
-    const pbIds = new Set(pbRecords.map((r: any) => r.id || r.pb_id));
-    const localOnly = dexieRecords.filter((r: any) => r.synced === false && (!r.pb_id || !pbIds.has(r.pb_id)));
+    // 1. Create a map of PB records for fast lookup
+    const dataMap = new Map();
+    pbRecords.forEach((r: any) => {
+      const id = r.id || r.pb_id;
+      dataMap.set(id, r);
+    });
+
+    // 2. Process Dexie records: unsynced changes should OVERRIDE PB records
+    dexieRecords.forEach((r: any) => {
+      if (r.synced === false) {
+        if (r.pb_id) {
+          // Optimistic Update: Replace cloud version with local version
+          dataMap.set(r.pb_id, r);
+        } else {
+          // Optimistic Create: Add new local record
+          dataMap.set(`local-${r.id}`, r);
+        }
+      }
+    });
     
-    return [...pbRecords, ...localOnly];
+    return Array.from(dataMap.values());
   }, [isPb, pbRecords, dexieRecords]);
 
   return {

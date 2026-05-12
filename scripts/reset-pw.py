@@ -1,8 +1,9 @@
+import os
 import requests
 
 URL = "https://code-rafiki.pockethost.io"
-EMAIL = "aturaerick@gmail.com"
-PASSWORD = "dGY@SrzA86PQc5n"
+EMAIL = os.environ["POCKETBASE_ADMIN_EMAIL"]
+PASSWORD = os.environ["POCKETBASE_ADMIN_PASSWORD"]
 
 def get_token():
     for _ in range(5):

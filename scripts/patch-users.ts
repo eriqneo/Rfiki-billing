@@ -1,10 +1,11 @@
+import 'dotenv/config';
 import PocketBase from 'pocketbase';
 
 const pb = new PocketBase('https://code-rafiki.pockethost.io');
 
 async function patchUsersSchema() {
   try {
-    await pb.collection('_superusers').authWithPassword('aturaerick@gmail.com', 'dGY@SrzA86PQc5n');
+    await pb.collection('_superusers').authWithPassword(process.env.POCKETBASE_ADMIN_EMAIL!, process.env.POCKETBASE_ADMIN_PASSWORD!);
     console.log('Admin authenticated.');
 
     // 1. Add custom fields to the 'users' auth collection

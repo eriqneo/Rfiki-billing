@@ -104,7 +104,7 @@ export interface BusinessProfile {
 
 export interface SyncQueue {
   id?: number;
-  entity: 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'meetings' | 'team_members' | 'business' | 'clients';
+  entity: 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'meetings' | 'team_members' | 'business' | 'clients' | 'pocket_host_instances';
   entityId: number;
   operation: 'CREATE' | 'UPDATE' | 'DELETE';
   timestamp: number;
@@ -173,19 +173,19 @@ export class NexusDatabase extends Dexie {
 
   constructor() {
     super('NexusDatabase');
-    this.version(17).stores({
-      expenses: '++id, pb_id, date, category, sub_tag, amount, client_id, synced',
-      payments: '++id, pb_id, client_id, amount, method, status, date, transaction_id, idempotency_key, synced',
-      agreements: '++id, pb_id, client_id, file_path, status, synced',
-      billing_promises: '++id, pb_id, amount_due, due_date, client_id, status, synced',
+    this.version(18).stores({
+      expenses: '++id, pb_id, date, category, sub_tag, amount, client_id',
+      payments: '++id, pb_id, client_id, amount, method, status, date, transaction_id, idempotency_key',
+      agreements: '++id, pb_id, client_id, file_path, status',
+      billing_promises: '++id, pb_id, amount_due, due_date, client_id, status',
       syncQueue: '++id, entity, operation, timestamp',
-      meetings: '++id, pb_id, google_id, client_id, start_time, type, synced',
+      meetings: '++id, pb_id, google_id, client_id, start_time, type',
       pending_sync: '++id, entity, operation, timestamp',
-      team_members: '++id, pb_id, name, email, role, password_hash, must_change_password, synced',
-      business: '++id, pb_id, name, synced',
-      clients: '++id, pb_id, node_id, name, email, entity_type, project_tag, app_built, synced',
-      budgets: '++id, votehead, synced',
-      pocket_host_instances: '++id, pb_id, instance_name, client_id, status, synced',
+      team_members: '++id, pb_id, name, email, role, password_hash, must_change_password',
+      business: '++id, pb_id, name',
+      clients: '++id, pb_id, node_id, name, email, entity_type, project_tag, app_built',
+      budgets: '++id, votehead',
+      pocket_host_instances: '++id, pb_id, instance_name, client_id, status',
       auth_tokens: 'key',
       auth_session: 'key, user_id, expires_at'
     });

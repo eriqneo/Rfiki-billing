@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import PocketBase from 'pocketbase';
 
 // Run this using: npx tsx scripts/pb-migrate.ts
@@ -8,7 +9,7 @@ async function migrate() {
   try {
     console.log('Authenticating with PocketBase...');
     // Replace with your real admin email and password for code-rafiki.pockethost.io
-    await pb.collection('_superusers').authWithPassword('aturaerick@gmail.com', 'dGY@SrzA86PQc5n');
+    await pb.collection('_superusers').authWithPassword(process.env.POCKETBASE_ADMIN_EMAIL!, process.env.POCKETBASE_ADMIN_PASSWORD!);
     console.log('Authentication successful!');
   } catch (error: any) {
     console.error('Failed to authenticate:', error.message);

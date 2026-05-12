@@ -13,7 +13,7 @@ import { pb } from '../lib/pocketbase';
 export function Billing() {
   const { data: payments } = useUnifiedCollection<any>('payments', () => db.payments.orderBy('id').reverse().toArray());
   const { data: clients } = useUnifiedCollection<Client>('clients', () => db.clients.toArray());
-  const { addEntity, isOnline } = useSync();
+  const { addEntity, updateEntity, isOnline } = useSync();
   const { showToast } = useToast();
   const [editingPayment, setEditingPayment] = useState<any>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -97,38 +97,19 @@ export function Billing() {
         const isPbMode = import.meta.env.VITE_AUTH_MODE === 'pocketbase';
         const targetId = editingPayment.id;
 
-        if (isPbMode && isOnline) {
-          const pbId = typeof targetId === 'string' ? targetId : editingPayment.pb_id;
-          if (pbId) {
-            await pb.collection('payments').update(pbId, payload);
-          }
-        }
-
         if (typeof targetId === 'number') {
-          await db.payments.update(targetId, payload);
+          await updateEntity('payments', targetId, payload);
         } else if (typeof targetId === 'string') {
           const local = await db.payments.where('pb_id').equals(targetId).first();
           if (local?.id) {
-            await db.payments.update(local.id, payload);
+            await updateEntity('payments', local.id, payload);
+          } else if (isPbMode && isOnline) {
+            await pb.collection('payments').update(targetId, payload);
           }
         }
         showToast('Payment record updated', 'success');
       } else {
-        if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
-          if (isOnline) {
-            await pb.collection('payments').create(payload);
-          } else {
-            await db.syncQueue.add({
-              entity: 'payments',
-              entityId: 0,
-              operation: 'CREATE',
-              timestamp: Date.now()
-            });
-            await db.payments.add({ ...payload, synced: false });
-          }
-        } else {
-          await addEntity('payments', payload);
-        }
+        await addEntity('payments', payload);
         showToast('Payment successful', 'success');
       }
 
