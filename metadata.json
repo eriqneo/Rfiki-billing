@@ -1,0 +1,6 @@
+{
+  "name": "Nexus Business Manager",
+  "description": "An offline-first business management PWA with Glassmorphism UI, featuring Google Calendar synchronization, billing, and expense tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
