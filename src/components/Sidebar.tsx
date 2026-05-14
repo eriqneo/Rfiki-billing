@@ -33,9 +33,14 @@ interface SidebarProps {
   currentView: ViewType;
   setView: (view: ViewType) => void;
   isSyncing: boolean;
+  cloudBackoff?: {
+    isPaused: boolean;
+    waitMs: number;
+    message: string;
+  };
 }
 
-export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
+export function Sidebar({ currentView, setView, isSyncing, cloudBackoff }: SidebarProps) {
   const { theme } = useTheme();
   const { currentUser, logout, canAccess } = useAuth();
   const [isOpen, setIsOpen] = React.useState(false);
@@ -150,12 +155,22 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
           <div className="shrink-0 px-6 space-y-4 pt-6 pb-2 mt-auto">
             {/* The old offline/online chip was removed in favor of the user badge indicator */}
 
-            {isSyncing && (
+            {cloudBackoff?.isPaused ? (
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-3">
+                <div className="flex items-center gap-2 text-[10px] font-black text-amber-300 uppercase tracking-[0.15em]">
+                  <WifiOff className="w-3.5 h-3.5" />
+                  Cloud Paused
+                </div>
+                <p className="mt-1 text-[9px] font-bold leading-relaxed text-amber-100/75">
+                  Sync resumes in {Math.ceil(cloudBackoff.waitMs / 1000)}s.
+                </p>
+              </div>
+            ) : isSyncing ? (
               <div className="flex items-center gap-2 text-[10px] font-black text-accent-green uppercase tracking-[0.15em] animate-pulse">
                 <Video className="w-3.5 h-3.5" />
                 Processing...
               </div>
-            )}
+            ) : null}
             
             {/* User Profile Widget */}
             {currentUser && (

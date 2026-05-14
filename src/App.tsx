@@ -24,7 +24,7 @@ import { AnimatePresence, motion } from 'motion/react';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
-  const { isSyncing } = useSync();
+  const { isSyncing, cloudBackoff } = useSync();
   const { isAuthenticated, isLoading, currentUser, canAccess } = useAuth();
 
   useEffect(() => {
@@ -140,6 +140,7 @@ export default function App() {
         currentView={currentView} 
         setView={setCurrentView} 
         isSyncing={isSyncing} 
+        cloudBackoff={cloudBackoff}
       />
       
       <main className="flex-1 lg:ml-60 min-h-screen p-6 md:p-12 pb-24 lg:pb-12 transition-colors duration-500">

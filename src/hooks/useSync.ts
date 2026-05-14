@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { db, type Expense, type Payment, type Agreement, type PaymentPromise, type Meeting, type TeamMember, type BusinessProfile, type Client, type PocketHostInstance, type Quotation, type QuotationTemplate, type Invoice } from '../db/db';
 import { googleCalendarService } from '../services/googleCalendarService';
 import { pb } from '../lib/pocketbase';
+import { getPocketBaseRateLimitState, isPocketBaseRateLimited, notePocketBaseRateLimit, subscribeToPocketBaseRateLimit } from '../lib/pocketbaseRateLimit';
 
 const PB_COLLECTIONS: Record<string, string> = {
   expenses: 'expenses',
@@ -19,7 +20,7 @@ const PB_COLLECTIONS: Record<string, string> = {
 };
 
 const SYNCABLE_COLLECTIONS = Object.keys(PB_COLLECTIONS) as Array<keyof EntityMap>;
-const AUTO_SYNC_INTERVAL_MS = 15000;
+const AUTO_SYNC_INTERVAL_MS = 30000;
 
 let globalSyncInFlight = false;
 let globalSweepInFlight = false;
@@ -140,6 +141,7 @@ function findStableRemoteMatch(localData: any, remoteRecords: any[]) {
 export function useSync() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [cloudBackoff, setCloudBackoff] = useState(getPocketBaseRateLimitState());
 
   const rebuildSyncQueue = useCallback(async (options: RebuildSyncQueueOptions = {}) => {
     if (globalSweepInFlight) return 0;
@@ -165,12 +167,14 @@ export function useSync() {
             options.verifyCloud &&
             import.meta.env.VITE_AUTH_MODE === 'pocketbase' &&
             navigator.onLine &&
-            pb.authStore.isValid
+            pb.authStore.isValid &&
+            !getPocketBaseRateLimitState().isPaused
           ) {
             try {
               remoteRecords = await pb.collection(PB_COLLECTIONS[col]).getFullList({ requestKey: `audit-${col}` });
               console.log(`[AUDIT-CLOUD] ${col}: Remote=${remoteRecords.length}`);
             } catch (error) {
+              if (isPocketBaseRateLimited(error)) notePocketBaseRateLimit(undefined, (error as any)?.response);
               console.error(`[AUDIT-CLOUD-ERROR] Failed to inspect ${col}:`, error);
             }
           }
@@ -221,9 +225,15 @@ export function useSync() {
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    const unsubscribeBackoff = subscribeToPocketBaseRateLimit(setCloudBackoff);
+    const backoffTimer = window.setInterval(() => {
+      setCloudBackoff(getPocketBaseRateLimitState());
+    }, 1000);
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      unsubscribeBackoff();
+      window.clearInterval(backoffTimer);
     };
   }, []);
 
@@ -231,6 +241,7 @@ export function useSync() {
     console.log(`[SYNC-ENTRY] Online: ${navigator.onLine}, Busy: ${globalSyncInFlight}, Auth: ${pb.authStore.isValid}`);
     const summary = { processed: 0, failed: 0 };
     if (!navigator.onLine || globalSyncInFlight) return summary;
+    if (getPocketBaseRateLimitState().isPaused) return summary;
 
     await rebuildSyncQueue();
 
@@ -335,6 +346,10 @@ export function useSync() {
                   }
                   syncedSuccessfully = true;
                 } catch (err) {
+                  if (isPocketBaseRateLimited(err)) {
+                    notePocketBaseRateLimit(undefined, (err as any)?.response);
+                    break;
+                  }
                   console.error(`PB sync failed for ${item.entity}:`, err);
                   summary.failed++;
                 }
@@ -361,6 +376,10 @@ export function useSync() {
             console.log(`[SYNC] Successfully synced ${item.entity} #${item.entityId}`);
           }
         } catch (error) {
+          if (isPocketBaseRateLimited(error)) {
+            notePocketBaseRateLimit(undefined, (error as any)?.response);
+            break;
+          }
           console.error(`[SYNC] Failed to sync item ${item.id}:`, error);
           summary.failed++;
         }
@@ -382,10 +401,10 @@ export function useSync() {
   }, [rebuildSyncQueue]);
 
   useEffect(() => {
-    if (isOnline) {
+    if (isOnline && !cloudBackoff.isPaused) {
       processSyncQueue();
     }
-  }, [isOnline, processSyncQueue]);
+  }, [isOnline, cloudBackoff.isPaused, processSyncQueue]);
 
   useEffect(() => {
     const unsubscribe = pb.authStore.onChange(() => {
@@ -393,7 +412,7 @@ export function useSync() {
     });
 
     const interval = window.setInterval(() => {
-      if (canRunForegroundSync()) processSyncQueue();
+      if (canRunForegroundSync() && !getPocketBaseRateLimitState().isPaused) processSyncQueue();
     }, AUTO_SYNC_INTERVAL_MS);
 
     return () => {
@@ -458,9 +477,18 @@ export function useSync() {
       import.meta.env.VITE_AUTH_MODE === 'pocketbase' &&
       navigator.onLine &&
       pb.authStore.isValid &&
+      !getPocketBaseRateLimitState().isPaused &&
       existingRecord?.pb_id
     ) {
-      await pb.collection(PB_COLLECTIONS[entity]).delete(existingRecord.pb_id);
+      try {
+        await pb.collection(PB_COLLECTIONS[entity]).delete(existingRecord.pb_id);
+      } catch (error) {
+        if (isPocketBaseRateLimited(error)) {
+          notePocketBaseRateLimit(undefined, (error as any)?.response);
+        } else {
+          throw error;
+        }
+      }
     }
 
     // @ts-ignore - dynamic table access
@@ -476,5 +504,5 @@ export function useSync() {
     }
   };
 
-  return { isSyncing, isOnline, addEntity, updateEntity, deleteEntity, processSyncQueue, rebuildSyncQueue };
+  return { isSyncing, isOnline, cloudBackoff, addEntity, updateEntity, deleteEntity, processSyncQueue, rebuildSyncQueue };
 }

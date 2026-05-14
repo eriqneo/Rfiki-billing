@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { db, TeamMember } from '../db/db';
 import { pb } from '../lib/pocketbase';
+import { isPocketBaseRateLimited, notePocketBaseRateLimit } from '../lib/pocketbaseRateLimit';
 
 const USER_PROFILE_CACHE_KEY = 'rafiki_user_profile';
 
@@ -84,9 +85,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               });
             }
           } catch (e) {
-            pb.authStore.clear();
-            clearProfileCache();
-            setCurrentUser(null);
+            if (isPocketBaseRateLimited(e)) {
+              notePocketBaseRateLimit(undefined, (e as any)?.response);
+              const cached = loadProfileCache();
+              if (cached) {
+                setCurrentUser({
+                  id: cached.id as any,
+                  name: cached.name,
+                  email: cached.email,
+                  role: cached.role,
+                  module_permissions: cached.module_permissions || [],
+                  synced: true,
+                });
+              }
+            } else {
+              pb.authStore.clear();
+              clearProfileCache();
+              setCurrentUser(null);
+            }
           }
         } else {
           clearProfileCache();
@@ -151,6 +167,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return true;
         }
       } catch (error: any) {
+        if (isPocketBaseRateLimited(error)) {
+          notePocketBaseRateLimit(undefined, error?.response);
+        }
         console.warn('PocketBase login failed (possibly offline or rate-limited), falling back to local DB', error);
         // Do not return false here; let it fall through to local DB authentication for offline support
       }
@@ -194,6 +213,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cached) saveProfileCache({ ...cached, name: savedName });
         return true;
       } catch (e: any) {
+        if (isPocketBaseRateLimited(e)) {
+          notePocketBaseRateLimit(undefined, e?.response);
+        }
         console.error('Failed to update name in PocketBase:', e?.response || e);
         // Revert UI to old name if PB failed
         setCurrentUser(prev => prev ? { ...prev, name: currentUser.name } : null);

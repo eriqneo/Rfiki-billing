@@ -1,15 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { pb } from '../lib/pocketbase';
+import { getPocketBaseRateLimitState, isPocketBaseRateLimited, notePocketBaseRateLimit } from '../lib/pocketbaseRateLimit';
 
 const CACHE_KEY_PREFIX = 'rafiki_pb_cache_';
-const AUTO_REFETCH_INTERVAL_MS = 30000;
+const AUTO_REFETCH_INTERVAL_MS = 60000;
+const COLLECTION_REFRESH_COOLDOWN_MS = 20000;
+const collectionRefreshTimes = new Map<string, number>();
 
 function canRefreshCollection() {
   return (
     import.meta.env.VITE_AUTH_MODE === 'pocketbase' &&
     navigator.onLine &&
     document.visibilityState !== 'hidden' &&
-    pb.authStore.isValid
+    pb.authStore.isValid &&
+    !getPocketBaseRateLimitState().isPaused
   );
 }
 
@@ -37,22 +41,31 @@ export function usePbCollection<T>(collectionName: string) {
     if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase' || !pb.authStore.isValid) {
       return [];
     }
+    if (getPocketBaseRateLimitState().isPaused) return records;
+
+    const now = Date.now();
+    const lastRefresh = collectionRefreshTimes.get(collectionName) || 0;
+    if (options.silent && now - lastRefresh < COLLECTION_REFRESH_COOLDOWN_MS) {
+      return records;
+    }
 
     if (!options.silent) setIsLoading(true);
     try {
       const data = await pb.collection(collectionName).getFullList();
+      collectionRefreshTimes.set(collectionName, Date.now());
       const next = data as unknown as T[];
       updateRecords(next);
       setError(null);
       return next;
     } catch (err) {
+      if (isPocketBaseRateLimited(err)) notePocketBaseRateLimit(undefined, (err as any)?.response);
       console.error(`Refetch failed for ${collectionName}:`, err);
       setError(err);
       return [];
     } finally {
       if (!options.silent) setIsLoading(false);
     }
-  }, [collectionName, updateRecords]);
+  }, [collectionName, records, updateRecords]);
 
   const upsertRecord = useCallback((record: T) => {
     setRecords((prev) => {
@@ -88,11 +101,18 @@ export function usePbCollection<T>(collectionName: string) {
 
     // 1. Initial fetch
     const fetchInitial = async () => {
+      if (getPocketBaseRateLimitState().isPaused) {
+        setIsLoading(false);
+        return;
+      }
+
       try {
         const data = await pb.collection(collectionName).getFullList();
+        collectionRefreshTimes.set(collectionName, Date.now());
         if (isMounted) updateRecords(data as unknown as T[]);
         setIsLoading(false);
       } catch (err) {
+        if (isPocketBaseRateLimited(err)) notePocketBaseRateLimit(undefined, (err as any)?.response);
         if (isMounted) {
           console.error(`Initial fetch failed for ${collectionName}:`, err);
           setError(err);
