@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AlertTriangle, Calculator, CheckCircle2, CopyPlus, CreditCard, Download, Edit2, FileSpreadsheet, FileText, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Calculator, CheckCircle2, ChevronLeft, ChevronRight, CopyPlus, CreditCard, Download, Edit2, FileSpreadsheet, FileText, Plus, Save, Search, Trash2, Upload, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { db, type BusinessProfile, type Client, type QuoteLineItem, type Quotation, type QuotationTemplate } from '../db/db';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
@@ -154,6 +154,7 @@ export function Quotations() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const filteredQuotes = useMemo(() => {
     return (quotations || [])
@@ -175,6 +176,19 @@ export function Quotations() {
       value: all.reduce((sum: number, q: any) => sum + (Number(q.total) || 0), 0),
     };
   }, [quotations]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter]);
+
+  const getPageRange = (page: number) => {
+    if (page === 1) return { start: 0, end: 5 };
+    const start = 5 + (page - 2) * 10;
+    return { start, end: start + 10 };
+  };
+  const { start, end } = getPageRange(currentPage);
+  const paginatedQuotes = filteredQuotes.slice(start, end);
+  const totalPages = filteredQuotes.length <= 5 ? 1 : 1 + Math.ceil((filteredQuotes.length - 5) / 10);
 
   const openCreate = () => {
     setEditingQuote(null);
@@ -300,7 +314,7 @@ export function Quotations() {
       </section>
 
       <section className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        {filteredQuotes.map((quote: any) => (
+        {paginatedQuotes.map((quote: any) => (
           <article key={getQuoteId(quote)} className="glass-panel rounded-3xl p-6 transition-all hover:border-accent-green/30">
             <div className="mb-5 rounded-2xl border border-white/10 bg-white/[0.025] p-1">
               <div className="grid grid-cols-3 gap-1">
@@ -401,6 +415,17 @@ export function Quotations() {
           </div>
         )}
       </section>
+
+      {totalPages > 1 && (
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={totalPages}
+          start={start}
+          end={end}
+          totalItems={filteredQuotes.length}
+          onPageChange={setCurrentPage}
+        />
+      )}
 
       <AnimatePresence>
         {isModalOpen && (
@@ -604,6 +629,60 @@ function BillingPlanModal({
           {saving ? 'Saving Milestones...' : 'Save Billable Milestones'}
         </button>
       </motion.div>
+    </div>
+  );
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  start,
+  end,
+  totalItems,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  start: number;
+  end: number;
+  totalItems: number;
+  onPageChange: (page: number | ((page: number) => number)) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between px-2">
+      <p className="text-[10px] font-black uppercase tracking-widest text-text-dim">
+        Showing {start + 1} to {Math.min(end, totalItems)} of {totalItems} Entries
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPageChange(page => Math.max(1, page - 1))}
+          disabled={currentPage === 1}
+          className="rounded-xl border border-white/10 bg-white/5 p-2 text-text-dim transition-all hover:text-accent-green disabled:opacity-20"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="flex items-center gap-1">
+          {Array.from({ length: totalPages }, (_, index) => index + 1).map(page => (
+            <button
+              key={page}
+              onClick={() => onPageChange(page)}
+              className={cn(
+                "h-8 w-8 rounded-lg text-[10px] font-black transition-all",
+                currentPage === page ? "bg-accent-green text-bg-deep shadow-neon" : "bg-white/5 text-text-dim hover:text-text-main"
+              )}
+            >
+              {page}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => onPageChange(page => Math.min(totalPages, page + 1))}
+          disabled={currentPage === totalPages}
+          className="rounded-xl border border-white/10 bg-white/5 p-2 text-text-dim transition-all hover:text-accent-green disabled:opacity-20"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }

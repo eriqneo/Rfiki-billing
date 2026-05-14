@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Download, FileText, Plus, ReceiptText, Send, X } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, Plus, ReceiptText, Send, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { db, type BusinessProfile, type Client, type Invoice, type PaymentPromise } from '../db/db';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
@@ -35,12 +35,26 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
   const [statusFilter, setStatusFilter] = useState<'all' | Invoice['status']>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const filteredInvoices = useMemo(() => {
     return (invoices || [])
       .filter(invoice => statusFilter === 'all' || invoice.status === statusFilter)
       .sort((a, b) => String(b.issue_date || '').localeCompare(String(a.issue_date || '')));
   }, [invoices, statusFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter]);
+
+  const getPageRange = (page: number) => {
+    if (page === 1) return { start: 0, end: 5 };
+    const start = 5 + (page - 2) * 10;
+    return { start, end: start + 10 };
+  };
+  const { start, end } = getPageRange(currentPage);
+  const paginatedInvoices = filteredInvoices.slice(start, end);
+  const totalPages = filteredInvoices.length <= 5 ? 1 : 1 + Math.ceil((filteredInvoices.length - 5) / 10);
 
   const existingPromiseIds = new Set((invoices || []).map(invoice => invoice.billing_promise_id).filter(Boolean));
   const existingPromiseKeys = new Set((invoices || []).map(invoice => `${invoice.client_id}:${invoice.quote_number || ''}:${invoice.milestone_title || ''}`));
@@ -146,7 +160,7 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
       </div>
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        {filteredInvoices.map(invoice => (
+        {paginatedInvoices.map(invoice => (
           <article key={String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="glass-panel rounded-3xl border-white/10 p-6">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
@@ -196,6 +210,17 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
         </div>
       )}
 
+      {totalPages > 1 && (
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={totalPages}
+          start={start}
+          end={end}
+          totalItems={filteredInvoices.length}
+          onPageChange={setCurrentPage}
+        />
+      )}
+
       <AnimatePresence>
         {isModalOpen && (
           <InvoiceModal
@@ -219,6 +244,60 @@ function Meta({ label, value, status }: { label: string; value: string; status?:
     <div>
       <p className="text-[8px] font-black uppercase tracking-[0.18em] text-text-dim">{label}</p>
       <p className={cn('mt-1 text-xs font-black uppercase text-text-main', status === 'paid' && 'text-accent-green', status === 'void' && 'text-red-400', status === 'sent' && 'text-blue-300')}>{value}</p>
+    </div>
+  );
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  start,
+  end,
+  totalItems,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  start: number;
+  end: number;
+  totalItems: number;
+  onPageChange: (page: number | ((page: number) => number)) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between px-2">
+      <p className="text-[10px] font-black uppercase tracking-widest text-text-dim">
+        Showing {start + 1} to {Math.min(end, totalItems)} of {totalItems} Entries
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onPageChange(page => Math.max(1, page - 1))}
+          disabled={currentPage === 1}
+          className="rounded-xl border border-white/10 bg-white/5 p-2 text-text-dim transition-all hover:text-accent-green disabled:opacity-20"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <div className="flex items-center gap-1">
+          {Array.from({ length: totalPages }, (_, index) => index + 1).map(page => (
+            <button
+              key={page}
+              onClick={() => onPageChange(page)}
+              className={cn(
+                "h-8 w-8 rounded-lg text-[10px] font-black transition-all",
+                currentPage === page ? "bg-accent-green text-bg-deep shadow-neon" : "bg-white/5 text-text-dim hover:text-text-main"
+              )}
+            >
+              {page}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => onPageChange(page => Math.min(totalPages, page + 1))}
+          disabled={currentPage === totalPages}
+          className="rounded-xl border border-white/10 bg-white/5 p-2 text-text-dim transition-all hover:text-accent-green disabled:opacity-20"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }
