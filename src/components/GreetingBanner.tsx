@@ -1,42 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/db';
 import { Calendar, CreditCard, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 
-export function GreetingBanner() {
+export function GreetingBanner({
+  todaysSyncs = 0,
+  pendingBills = 0,
+  activeContracts = 0,
+}: {
+  todaysSyncs?: number;
+  pendingBills?: number;
+  activeContracts?: number;
+}) {
   const { currentUser } = useAuth();
   const [greeting, setGreeting] = useState('');
   const [icon, setIcon] = useState('');
-
-  // Live queries for quick stats
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date();
-  todayEnd.setHours(23, 59, 59, 999);
-
-  const todayMeetings = useLiveQuery(() => 
-    db.meetings
-      .where('start_time')
-      .between(todayStart.toISOString(), todayEnd.toISOString())
-      .count()
-  , []);
-
-  const pendingPayments = useLiveQuery(() => 
-    db.billing_promises
-      .where('status')
-      .equals('pending')
-      .count()
-  , []);
-
-  const activeAgreements = useLiveQuery(() => 
-    db.agreements
-      .where('status')
-      .equals('active')
-      .count()
-  , []);
 
   useEffect(() => {
     const updateGreeting = () => {
@@ -95,7 +74,7 @@ export function GreetingBanner() {
             </div>
             <div>
               <p className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Today's Syncs</p>
-              <p className="text-sm font-black text-text-main tabular-nums">{todayMeetings ?? 0}</p>
+              <p className="text-sm font-black text-text-main tabular-nums">{todaysSyncs}</p>
             </div>
           </div>
 
@@ -105,7 +84,7 @@ export function GreetingBanner() {
             </div>
             <div>
               <p className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Pending Bills</p>
-              <p className="text-sm font-black text-text-main tabular-nums">{pendingPayments ?? 0}</p>
+              <p className="text-sm font-black text-text-main tabular-nums">{pendingBills}</p>
             </div>
           </div>
 
@@ -115,7 +94,7 @@ export function GreetingBanner() {
             </div>
             <div>
               <p className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Active Contracts</p>
-              <p className="text-sm font-black text-text-main tabular-nums">{activeAgreements ?? 0}</p>
+              <p className="text-sm font-black text-text-main tabular-nums">{activeContracts}</p>
             </div>
           </div>
         </div>

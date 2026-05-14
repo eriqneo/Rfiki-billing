@@ -4,6 +4,8 @@ import { Sidebar, ViewType } from './components/Sidebar';
 import { Dashboard } from './views/Dashboard';
 import { CalendarView } from './views/CalendarView';
 import { Billing } from './views/Billing';
+import { Quotations } from './views/Quotations';
+import { Invoices } from './views/Invoices';
 import { Agreements } from './views/Agreements';
 import { Expenses } from './views/Expenses';
 import { Meetings } from './views/Meetings';
@@ -66,6 +68,7 @@ export default function App() {
             db.expenses.clear(),
             db.agreements.clear(),
             db.billing_promises.clear(),
+            db.invoices.clear(),
             db.syncQueue.clear(),
           ]);
           localStorage.setItem(migrationKey, 'true');
@@ -93,6 +96,8 @@ export default function App() {
       case 'dashboard': return <Dashboard setView={setCurrentView} />;
       case 'calendar': return <CalendarView setView={setCurrentView} />;
       case 'billing': return <Billing />;
+      case 'quotations': return <Quotations />;
+      case 'invoices': return <Invoices setView={setCurrentView} />;
       case 'agreements': return <Agreements />;
       case 'expenses': return <Expenses />;
       case 'meetings': return <Meetings />;

@@ -14,7 +14,8 @@ import {
   WifiOff,
   Video,
   PieChart,
-  Server
+  Server,
+  ReceiptText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -26,7 +27,7 @@ import { LogOut, User as UserIcon } from 'lucide-react';
 import { pb } from '../lib/pocketbase';
 import { usePbCollection } from '../hooks/usePbCollection';
 
-export type ViewType = 'dashboard' | 'calendar' | 'billing' | 'agreements' | 'expenses' | 'meetings' | 'settings' | 'clients' | 'reports' | 'pockethost';
+export type ViewType = 'dashboard' | 'calendar' | 'billing' | 'quotations' | 'invoices' | 'agreements' | 'expenses' | 'meetings' | 'settings' | 'clients' | 'reports' | 'pockethost';
 
 interface SidebarProps {
   currentView: ViewType;
@@ -64,6 +65,8 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
     { id: 'meetings', label: 'Meetings', icon: Video },
     { id: 'billing', label: 'Billing', icon: CreditCard },
+    { id: 'quotations', label: 'Quotations', icon: ReceiptText },
+    { id: 'invoices', label: 'Invoices', icon: FileText },
     { id: 'pockethost', label: 'Pocket Host', icon: Server },
     { id: 'agreements', label: 'Agreements', icon: FileText },
     { id: 'expenses', label: 'Expenses', icon: TrendingUp },
@@ -75,6 +78,8 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'clients', label: 'Clients', icon: Users },
     { id: 'billing', label: 'Billing', icon: CreditCard },
+    { id: 'quotations', label: 'Quotes', icon: ReceiptText },
+    { id: 'invoices', label: 'Invoices', icon: FileText },
     { id: 'meetings', label: 'Meetings', icon: Video },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];

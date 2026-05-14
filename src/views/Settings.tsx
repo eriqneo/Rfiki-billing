@@ -85,6 +85,10 @@ export function Settings() {
   const [bizName, setBizName] = useState('');
   const [bizTill, setBizTill] = useState('');
   const [bizCurrency, setBizCurrency] = useState('KES');
+  const [bizEmail, setBizEmail] = useState('');
+  const [bizPhone, setBizPhone] = useState('');
+  const [bizWebsite, setBizWebsite] = useState('');
+  const [bizAddress, setBizAddress] = useState('');
   const [bizLogo, setBizLogo] = useState('');
   const [isSavingBiz, setIsSavingBiz] = useState(false);
   const [showBizToast, setShowBizToast] = useState(false);
@@ -115,6 +119,8 @@ export function Settings() {
     { id: 'calendar', label: 'Calendar' },
     { id: 'meetings', label: 'Meetings' },
     { id: 'billing', label: 'Billing' },
+    { id: 'quotations', label: 'Quotations' },
+    { id: 'invoices', label: 'Invoices' },
     { id: 'pockethost', label: 'Pocket Host' },
     { id: 'agreements', label: 'Agreements' },
     { id: 'expenses', label: 'Expenses' },
@@ -190,6 +196,10 @@ export function Settings() {
       setBizName(business[0].name);
       setBizTill(business[0].till_number);
       setBizCurrency(business[0].currency);
+      setBizEmail(business[0].email || '');
+      setBizPhone(business[0].phone || '');
+      setBizWebsite(business[0].website || '');
+      setBizAddress(business[0].address || '');
       if (business[0].logo_base64) {
         setBizLogo(business[0].logo_base64);
       }
@@ -361,7 +371,16 @@ export function Settings() {
 
     try {
       if (import.meta.env.VITE_AUTH_MODE === 'pocketbase') {
-        const pbData = { name: bizName, till_number: bizTill, currency: bizCurrency, logo_base64: bizLogo };
+        const pbData = {
+          name: bizName,
+          till_number: bizTill,
+          currency: bizCurrency,
+          email: bizEmail,
+          phone: bizPhone,
+          website: bizWebsite,
+          address: bizAddress,
+          logo_base64: bizLogo
+        };
 
         // 1. Try to find existing record in PB regardless of local pb_id
         const records = await pb.collection('business').getFullList({ requestKey: 'save-biz' });
@@ -390,9 +409,9 @@ export function Settings() {
       } else {
         const existing = await db.business.toCollection().first();
         if (existing) {
-          await db.business.update(existing.id!, { name: bizName, till_number: bizTill, currency: bizCurrency, logo_base64: bizLogo, synced: false });
+          await db.business.update(existing.id!, { name: bizName, till_number: bizTill, currency: bizCurrency, email: bizEmail, phone: bizPhone, website: bizWebsite, address: bizAddress, logo_base64: bizLogo, synced: false });
         } else {
-          await db.business.add({ name: bizName, till_number: bizTill, currency: bizCurrency, logo_base64: bizLogo, synced: false });
+          await db.business.add({ name: bizName, till_number: bizTill, currency: bizCurrency, email: bizEmail, phone: bizPhone, website: bizWebsite, address: bizAddress, logo_base64: bizLogo, synced: false });
         }
       }
       setShowBizToast(true);
@@ -440,7 +459,7 @@ export function Settings() {
       setSyncNotice(prev => ({ ...prev, message: 'Scanning local records for cloud gaps...', progress: 32 }));
       const reQueued = await rebuildSyncQueue({
         verifyCloud: true,
-        collections: ['pocket_host_instances', 'clients', 'payments', 'expenses', 'billing_promises', 'agreements', 'meetings']
+        collections: ['pocket_host_instances', 'clients', 'payments', 'expenses', 'billing_promises', 'agreements', 'meetings', 'quotations', 'quotation_templates', 'invoices']
       });
 
       setSyncNotice(prev => ({
@@ -908,6 +927,45 @@ export function Settings() {
                   <option value="EUR" className="bg-bg-deep">EUR (€)</option>
                   <option value="GBP" className="bg-bg-deep">GBP (£)</option>
                 </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Business Email</label>
+                <input
+                  type="email"
+                  value={bizEmail}
+                  onChange={e => setBizEmail(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Business Phone</label>
+                <input
+                  type="text"
+                  value={bizPhone}
+                  onChange={e => setBizPhone(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Website</label>
+                <input
+                  type="url"
+                  value={bizWebsite}
+                  onChange={e => setBizWebsite(e.target.value)}
+                  placeholder="https://example.com"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Address</label>
+                <input
+                  type="text"
+                  value={bizAddress}
+                  onChange={e => setBizAddress(e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-xs font-bold text-text-main focus:border-accent-green outline-none"
+                />
               </div>
             </div>
             <button

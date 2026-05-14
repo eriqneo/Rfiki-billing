@@ -1,14 +1,20 @@
 import React, { useMemo } from 'react';
 import { db } from '../db/db';
-import { TrendingUp, CreditCard, Users, Clock, Plus, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { GreetingBanner } from '../components/GreetingBanner';
 import { cn } from '../lib/utils';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
+import { useLiveQuery } from 'dexie-react-hooks';
 
 function sameClient(recordClientId: unknown, client: any) {
   const candidate = String(recordClientId || '');
   return candidate === String(client.node_id || '') || candidate === String(client.id || '');
+}
+
+function dateKey(value?: string) {
+  if (!value) return '';
+  return String(value).includes('T') ? String(value).split('T')[0] : String(value).slice(0, 10);
 }
 
 export function Dashboard({ setView }: { setView: (view: any) => void }) {
@@ -17,13 +23,46 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
   const { data: agreements } = useUnifiedCollection<any>('agreements', () => db.agreements.toArray());
   const { data: instances } = useUnifiedCollection<any>('pocket_host_instances', () => db.pocket_host_instances.toArray());
   const { data: billingPromises } = useUnifiedCollection<any>('billing_promises', () => db.billing_promises.toArray());
+  const { data: invoices } = useUnifiedCollection<any>('invoices', () => db.invoices.toArray());
+  const { data: quotations } = useUnifiedCollection<any>('quotations', () => db.quotations.toArray());
+  const { data: meetings } = useUnifiedCollection<any>('meetings', () => db.meetings.toArray());
   const { data: clients } = useUnifiedCollection<any>('clients', () => db.clients.toArray());
+  const syncQueue = useLiveQuery(() => db.syncQueue.toArray(), []);
 
   const totalRevenue = (payments || []).filter((p: any) => p.status === 'completed').reduce((sum: number, p: any) => sum + p.amount, 0);
   const totalExpenses = (expenses || []).reduce((sum: number, e: any) => sum + e.amount, 0);
   const remainingInstances = (instances || []).filter((i: any) => !i.client_id).length;
   const activeAgreements = (agreements || []).filter((a: any) => a.status === 'active').length;
   const pendingPayments = (payments || []).filter((p: any) => p.status === 'pending').length;
+  const today = new Date().toISOString().split('T')[0];
+  const billingClearanceRows = (payments || []).map((payment: any) => {
+    const client = (clients || []).find((item: any) => item.node_id === payment.client_id);
+    const totalPaid = (payments || [])
+      .filter((item: any) => item.client_id === payment.client_id && item.status === 'completed')
+      .reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
+    const agreedPrice = Number(client?.agreed_price) || 0;
+    const balance = Math.max(0, agreedPrice - totalPaid);
+    return {
+      payment,
+      agreedPrice,
+      balance,
+      isPendingClearance: agreedPrice > 0 && balance > 0,
+    };
+  });
+  const todaysSyncRecords = [
+    ...(payments || []).filter((record: any) => dateKey(record.date) === today),
+    ...(expenses || []).filter((record: any) => dateKey(record.date) === today),
+    ...(invoices || []).filter((record: any) => dateKey(record.issue_date) === today),
+    ...(quotations || []).filter((record: any) => dateKey(record.issue_date) === today),
+    ...(agreements || []).filter((record: any) => dateKey(record.signed_date || record.created_date) === today),
+    ...(meetings || []).filter((record: any) => dateKey(record.start_time) === today),
+    ...(instances || []).filter((record: any) => dateKey(record.created_at) === today),
+  ];
+  const todaysSynced = todaysSyncRecords.filter((record: any) => record.synced !== false).length;
+  const todaysLocal = todaysSyncRecords.length - todaysSynced;
+  const queuedToday = (syncQueue || []).filter((item: any) => new Date(item.timestamp).toISOString().split('T')[0] === today).length;
+  const todaysSyncCount = todaysSyncRecords.length + queuedToday;
+  const pendingBillCount = billingClearanceRows.filter(row => row.isPendingClearance).length;
   const projectSuccess = useMemo(() => {
     const getBillableTarget = (client: any) => {
       const agreedPrice = Number(client.agreed_price) || 0;
@@ -62,12 +101,15 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
     value: (clients || []).find((c: any) => c.node_id === a.client_id)?.agreed_price || 0
   }));
 
-  const today = new Date().toISOString().split('T')[0];
   const overduePromises = (billingPromises || []).filter((p: any) => p.status === 'pending' && p.due_date < today);
 
   return (
     <div className="space-y-8 pb-20">
-      <GreetingBanner />
+      <GreetingBanner
+        todaysSyncs={todaysSyncCount}
+        pendingBills={pendingBillCount}
+        activeContracts={activeAgreements}
+      />
       
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div className="title-group">
@@ -80,7 +122,7 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
         {[
           { label: 'Total Revenue', value: `KSh ${totalRevenue.toLocaleString()}`, color: 'accent-green' },
           { label: 'Available Servers', value: remainingInstances, color: 'accent-green' },
-          { label: 'Active Agreements', value: activeAgreements, color: 'text-main' },
+          { label: 'Active Contracts', value: activeAgreements, color: 'text-main', sub: activeAgreements === 1 ? '1 signed agreement' : `${activeAgreements} signed agreements` },
           {
             label: 'Project Success Rate',
             value: successRate !== '--' ? `${successRate}%` : '--',

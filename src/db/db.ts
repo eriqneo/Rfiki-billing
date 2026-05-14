@@ -17,6 +17,10 @@ export interface Expense {
 export interface Payment {
   id?: number;
   client_id: string;
+  quote_id?: string;
+  quote_number?: string;
+  billing_promise_id?: string;
+  billing_milestone_title?: string;
   amount: number;
   method: 'Cash' | 'Mpesa' | 'Bank';
   status: 'pending' | 'completed' | 'failed';
@@ -67,6 +71,11 @@ export interface PaymentPromise {
   amount_due: number;
   due_date: string;
   client_id: string;
+  quote_id?: string;
+  quote_number?: string;
+  milestone_title?: string;
+  notes?: string;
+  created_at?: string;
   payment_method?: 'Mpesa' | 'Bank' | 'Cash';
   status: 'fulfilled' | 'pending' | 'broken';
   pb_id?: string;
@@ -97,14 +106,103 @@ export interface BusinessProfile {
   name: string;
   till_number: string;
   currency: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  address?: string;
   logo_base64?: string;
+  pb_id?: string;
+  synced: boolean;
+}
+
+export interface QuoteLineItem {
+  id: string;
+  category?: string;
+  description: string;
+  scope_summary?: string;
+  quantity: number;
+  unit_price: number;
+  unit?: string;
+  total: number;
+  notes?: string;
+}
+
+export interface Quotation {
+  id?: number;
+  quote_number: string;
+  client_id?: string;
+  prospect_name: string;
+  prospect_email?: string;
+  prospect_phone?: string;
+  project_title: string;
+  project_summary?: string;
+  issue_date: string;
+  valid_until?: string;
+  currency: string;
+  items_json: string;
+  terms_json: string;
+  subtotal: number;
+  discount_amount: number;
+  tax_rate: number;
+  tax_amount: number;
+  total: number;
+  status: 'draft' | 'sent' | 'accepted' | 'declined' | 'expired';
+  billing_plan_created?: boolean;
+  notes?: string;
+  pb_id?: string;
+  synced: boolean;
+}
+
+export interface QuotationTemplate {
+  id?: number;
+  title: string;
+  category?: string;
+  description: string;
+  scope_summary?: string;
+  unit_price: number;
+  unit?: string;
+  tax_rate?: number;
+  is_active: boolean;
+  pb_id?: string;
+  synced: boolean;
+}
+
+export interface InvoiceLineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  notes?: string;
+}
+
+export interface Invoice {
+  id?: number;
+  invoice_number: string;
+  client_id: string;
+  client_name: string;
+  quote_id?: string;
+  quote_number?: string;
+  billing_promise_id?: string;
+  milestone_title?: string;
+  issue_date: string;
+  due_date: string;
+  currency: string;
+  items_json: string;
+  subtotal: number;
+  tax_rate: number;
+  tax_amount: number;
+  total: number;
+  status: 'draft' | 'sent' | 'paid' | 'void';
+  notes?: string;
+  paid_at?: string;
   pb_id?: string;
   synced: boolean;
 }
 
 export interface SyncQueue {
   id?: number;
-  entity: 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'meetings' | 'team_members' | 'business' | 'clients' | 'pocket_host_instances';
+  entity: 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'meetings' | 'team_members' | 'business' | 'clients' | 'pocket_host_instances' | 'quotations' | 'quotation_templates' | 'invoices';
   entityId: number;
   operation: 'CREATE' | 'UPDATE' | 'DELETE';
   timestamp: number;
@@ -148,7 +246,7 @@ export interface PocketHostInstance {
 
 export interface PendingSync {
   id?: number;
-  entity: 'meetings' | 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'team_members' | 'business' | 'clients' | 'pocket_host_instances';
+  entity: 'meetings' | 'expenses' | 'payments' | 'agreements' | 'billing_promises' | 'team_members' | 'business' | 'clients' | 'pocket_host_instances' | 'quotations' | 'quotation_templates' | 'invoices';
   entity_id: number;
   operation: 'CREATE' | 'UPDATE' | 'DELETE';
   payload?: string; // JSON string for full data if needed
@@ -168,24 +266,30 @@ export class NexusDatabase extends Dexie {
   clients!: Table<Client>;
   budgets!: Table<Budget>;
   pocket_host_instances!: Table<PocketHostInstance>;
+  quotations!: Table<Quotation>;
+  quotation_templates!: Table<QuotationTemplate>;
+  invoices!: Table<Invoice>;
   auth_tokens!: Table<{ key: string; tokens: any }>;
   auth_session!: Table<AuthSession>;
 
   constructor() {
     super('NexusDatabase');
-    this.version(18).stores({
+    this.version(22).stores({
       expenses: '++id, pb_id, date, category, sub_tag, amount, client_id',
-      payments: '++id, pb_id, client_id, amount, method, status, date, transaction_id, idempotency_key',
+      payments: '++id, pb_id, client_id, quote_id, quote_number, billing_promise_id, amount, method, status, date, transaction_id, idempotency_key',
       agreements: '++id, pb_id, client_id, file_path, status',
-      billing_promises: '++id, pb_id, amount_due, due_date, client_id, status',
+      billing_promises: '++id, pb_id, amount_due, due_date, client_id, quote_id, quote_number, milestone_title, status',
       syncQueue: '++id, entity, operation, timestamp',
       meetings: '++id, pb_id, google_id, client_id, start_time, type',
       pending_sync: '++id, entity, operation, timestamp',
       team_members: '++id, pb_id, name, email, role, password_hash, must_change_password',
-      business: '++id, pb_id, name',
+      business: '++id, pb_id, name, email, phone, website',
       clients: '++id, pb_id, node_id, name, email, entity_type, project_tag, app_built',
       budgets: '++id, votehead',
       pocket_host_instances: '++id, pb_id, instance_name, client_id, status',
+      quotations: '++id, pb_id, quote_number, client_id, prospect_name, project_title, status, billing_plan_created, issue_date, valid_until',
+      quotation_templates: '++id, pb_id, title, category, is_active',
+      invoices: '++id, pb_id, invoice_number, client_id, quote_number, billing_promise_id, status, issue_date, due_date',
       auth_tokens: 'key',
       auth_session: 'key, user_id, expires_at'
     });

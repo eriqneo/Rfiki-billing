@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { db, type Expense, type Payment, type Agreement, type PaymentPromise, type Meeting, type TeamMember, type BusinessProfile, type Client, type PocketHostInstance } from '../db/db';
+import { db, type Expense, type Payment, type Agreement, type PaymentPromise, type Meeting, type TeamMember, type BusinessProfile, type Client, type PocketHostInstance, type Quotation, type QuotationTemplate, type Invoice } from '../db/db';
 import { googleCalendarService } from '../services/googleCalendarService';
 import { pb } from '../lib/pocketbase';
 
@@ -12,7 +12,10 @@ const PB_COLLECTIONS: Record<string, string> = {
   team_members: 'team_members',
   business: 'business',
   clients: 'clients',
-  pocket_host_instances: 'pocket_host_instances'
+  pocket_host_instances: 'pocket_host_instances',
+  quotations: 'quotations',
+  quotation_templates: 'quotation_templates',
+  invoices: 'invoices'
 };
 
 const SYNCABLE_COLLECTIONS = Object.keys(PB_COLLECTIONS) as Array<keyof EntityMap>;
@@ -31,6 +34,9 @@ type EntityMap = {
   business: BusinessProfile;
   clients: Client;
   pocket_host_instances: PocketHostInstance;
+  quotations: Quotation;
+  quotation_templates: QuotationTemplate;
+  invoices: Invoice;
 };
 
 type SyncCollection = keyof EntityMap;
@@ -43,20 +49,36 @@ function canRunForegroundSync() {
   return navigator.onLine && document.visibilityState !== 'hidden';
 }
 
-function stripLocalFields(record: any) {
+function stripLocalFields(record: any, entity?: SyncCollection) {
   const { id, pb_id, synced, file_blob, ...pbData } = record;
-  if (pbData.name && !pbData.instance_name) {
-    pbData.instance_name = pbData.name;
+
+  if (entity === 'pocket_host_instances') {
+    if (pbData.name && !pbData.instance_name) {
+      pbData.instance_name = pbData.name;
+    }
+    if (pbData.renewal_date && !pbData.next_billing_date) {
+      pbData.next_billing_date = pbData.renewal_date;
+    }
+    if (!pbData.billing_cycle) {
+      pbData.billing_cycle = 'monthly';
+    }
+    if (!pbData.status) {
+      pbData.status = 'active';
+    }
   }
-  if (pbData.renewal_date && !pbData.next_billing_date) {
-    pbData.next_billing_date = pbData.renewal_date;
+
+  if (entity === 'quotations' || entity === 'invoices') {
+    for (const key of ['items_json', 'terms_json']) {
+      if (typeof pbData[key] === 'string') {
+        try {
+          pbData[key] = JSON.parse(pbData[key]);
+        } catch {
+          pbData[key] = [];
+        }
+      }
+    }
   }
-  if (!pbData.billing_cycle) {
-    pbData.billing_cycle = 'monthly';
-  }
-  if (!pbData.status) {
-    pbData.status = 'active';
-  }
+
   return pbData;
 }
 
@@ -103,6 +125,14 @@ function findStableRemoteMatch(localData: any, remoteRecords: any[]) {
       record.summary === localData.summary
     ) return true;
     if (localData.name && localData.till_number && record.name === localData.name) return true;
+    if (localData.quote_number && record.quote_number === localData.quote_number) return true;
+    if (localData.invoice_number && record.invoice_number === localData.invoice_number) return true;
+    if (
+      localData.title &&
+      localData.description &&
+      record.title === localData.title &&
+      record.description === localData.description
+    ) return true;
     return false;
   });
 }
@@ -261,7 +291,7 @@ export function useSync() {
               const localData = await db[item.entity].get(item.entityId);
 
               if (localData) {
-                const pbData = stripLocalFields(localData);
+                const pbData = stripLocalFields(localData, item.entity as SyncCollection);
                 const pbId = (localData as any).pb_id;
 
                 try {

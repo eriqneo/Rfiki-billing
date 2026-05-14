@@ -143,6 +143,10 @@ export function CalendarView({ setView }: CalendarViewProps) {
     // Also record a payment potentially
     await db.payments.add({
       client_id: promise.client_id,
+      quote_id: promise.quote_id,
+      quote_number: promise.quote_number,
+      billing_promise_id: String(promise.id || promise.pb_id || ''),
+      billing_milestone_title: promise.milestone_title,
       amount: promise.amount_due,
       method: promise.payment_method || 'Mpesa',
       status: 'completed',

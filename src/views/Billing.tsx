@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { db, Client } from '../db/db';
+import { db, Client, type Invoice, type PaymentPromise } from '../db/db';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { CreditCard, Plus, Clock, CheckCircle2, AlertCircle, ShieldCheck, Smartphone, Landmark, Zap, Search, ChevronDown, User, Building2, Trash2, FileDown, Filter, ChevronLeft, ChevronRight, Edit2 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -13,10 +13,13 @@ import { pb } from '../lib/pocketbase';
 export function Billing() {
   const { data: payments } = useUnifiedCollection<any>('payments', () => db.payments.orderBy('id').reverse().toArray());
   const { data: clients } = useUnifiedCollection<Client>('clients', () => db.clients.toArray());
-  const { addEntity, updateEntity, isOnline } = useSync();
+  const { data: billingPromises } = useUnifiedCollection<PaymentPromise>('billing_promises', () => db.billing_promises.toArray());
+  const { data: invoices } = useUnifiedCollection<Invoice>('invoices', () => db.invoices.toArray());
+  const { addEntity, updateEntity, deleteEntity, isOnline } = useSync();
   const { showToast } = useToast();
   const [editingPayment, setEditingPayment] = useState<any>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [paymentPendingDelete, setPaymentPendingDelete] = useState<any>(null);
   const [clearanceFilter, setClearanceFilter] = useState<'all' | 'cleared' | 'pending'>('all');
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -30,6 +33,10 @@ export function Billing() {
     amount: '',
     method: 'Mpesa' as 'Cash' | 'Mpesa' | 'Bank',
     transaction_id: '',
+    billing_promise_id: '',
+    quote_id: '',
+    quote_number: '',
+    billing_milestone_title: '',
   });
 
   const [clientSearch, setClientSearch] = useState('');
@@ -55,6 +62,21 @@ export function Billing() {
   const clientPayments = payments?.filter(p => p.client_id === formData.client_id && p.status === 'completed');
   const totalPaid = clientPayments?.reduce((sum, p) => sum + p.amount, 0) || 0;
   const balance = selectedClient ? selectedClient.agreed_price - totalPaid : 0;
+  const openClientPromises = (billingPromises || [])
+    .filter(promise => promise.client_id === formData.client_id && promise.status !== 'fulfilled')
+    .sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
+  const selectedPromise = openClientPromises.find(promise => String(promise.id || promise.pb_id) === formData.billing_promise_id);
+  const selectedInvoice = (invoices || []).find(invoice =>
+    invoice.status !== 'paid' &&
+    (
+      invoice.billing_promise_id === formData.billing_promise_id ||
+      (
+        invoice.client_id === formData.client_id &&
+        (invoice.quote_number || '') === (formData.quote_number || '') &&
+        (invoice.milestone_title || '') === (formData.billing_milestone_title || '')
+      )
+    )
+  );
 
   const clientInstances = useLiveQuery(() => 
     formData.client_id ? db.pocket_host_instances.where('client_id').equals(formData.client_id).toArray() : []
@@ -84,6 +106,10 @@ export function Billing() {
     const timestamp = new Date().toISOString();
     const payload = {
       client_id: formData.client_id,
+      quote_id: formData.quote_id,
+      quote_number: formData.quote_number,
+      billing_promise_id: formData.billing_promise_id,
+      billing_milestone_title: formData.billing_milestone_title,
       amount: Number(formData.amount),
       method: formData.method,
       status: 'completed' as 'pending' | 'completed' | 'failed',
@@ -113,13 +139,68 @@ export function Billing() {
         showToast('Payment successful', 'success');
       }
 
+      if (selectedPromise && payload.status === 'completed') {
+        await markPromiseFulfilled(selectedPromise);
+      }
+      if (selectedInvoice && payload.status === 'completed') {
+        await markInvoicePaid(selectedInvoice);
+      }
+
       setIsFormOpen(false);
       setEditingPayment(null);
-      setFormData({ client_id: '', client_name: '', amount: '', method: 'Mpesa', transaction_id: '' });
+      setFormData({
+        client_id: '',
+        client_name: '',
+        amount: '',
+        method: 'Mpesa',
+        transaction_id: '',
+        billing_promise_id: '',
+        quote_id: '',
+        quote_number: '',
+        billing_milestone_title: '',
+      });
       setClientSearch('');
     } catch (err: any) {
       console.error('Payment Error:', err);
       showToast(err?.message || 'Handshake failed', 'error');
+    }
+  };
+
+  const markPromiseFulfilled = async (promise: PaymentPromise) => {
+    const targetId = promise.id;
+    if (typeof targetId === 'number') {
+      await updateEntity('billing_promises', targetId, { status: 'fulfilled' });
+      return;
+    }
+
+    if (promise.pb_id) {
+      const local = await db.billing_promises.where('pb_id').equals(promise.pb_id).first();
+      if (local?.id) {
+        await updateEntity('billing_promises', local.id, { status: 'fulfilled' });
+        return;
+      }
+    }
+
+    if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline && typeof targetId === 'string') {
+      await pb.collection('billing_promises').update(targetId, { status: 'fulfilled' });
+    }
+  };
+
+  const markInvoicePaid = async (invoice: Invoice) => {
+    const patch = { status: 'paid' as const, paid_at: new Date().toISOString() };
+    if (typeof invoice.id === 'number') {
+      await updateEntity('invoices', invoice.id, patch);
+      return;
+    }
+    if (invoice.pb_id) {
+      const local = await db.invoices.where('pb_id').equals(invoice.pb_id).first();
+      if (local?.id) {
+        await updateEntity('invoices', local.id, patch);
+        return;
+      }
+      if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
+        await pb.collection('invoices').update(invoice.pb_id, patch);
+      }
     }
   };
 
@@ -132,21 +213,30 @@ export function Billing() {
       amount: payment.amount.toString(),
       method: payment.method,
       transaction_id: payment.transaction_id,
+      billing_promise_id: payment.billing_promise_id || '',
+      quote_id: payment.quote_id || '',
+      quote_number: payment.quote_number || '',
+      billing_milestone_title: payment.billing_milestone_title || '',
     });
     setClientSearch(client?.name || payment.client_id);
     setIsFormOpen(true);
   };
 
-  const handleDelete = async (payment: any) => {
-    if (!confirm('Delete this payment record? This cannot be undone.')) return;
-    setDeletingId(payment.id);
+  const handleDelete = async () => {
+    if (!paymentPendingDelete) return;
+    const payment = paymentPendingDelete;
+    setDeletingId(String(payment.id || payment.pb_id || payment.transaction_id));
     try {
-      if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
-        await pb.collection('payments').delete(payment.id);
-      }
       if (payment.id && typeof payment.id === 'number') {
-        await db.payments.delete(payment.id);
+        await deleteEntity('payments', payment.id);
+      } else if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline && typeof payment.id === 'string') {
+        await pb.collection('payments').delete(payment.id);
+      } else if (payment.pb_id && import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
+        await pb.collection('payments').delete(payment.pb_id);
+      } else {
+        throw new Error('Cannot delete this cloud payment while offline.');
       }
+      setPaymentPendingDelete(null);
       showToast('Payment deleted', 'success');
     } catch (err: any) {
       console.error('Delete failed:', err);
@@ -158,7 +248,7 @@ export function Billing() {
   const handleExport = () => {
     if (!payments || !payments.length) return;
     
-    const headers = ["Txn Status", "Transaction Reference", "Method", "Client Name", "Client ID", "Payment Date", "Amount Paid", "Current Balance", "Clearance Status"];
+    const headers = ["Txn Status", "Transaction Reference", "Method", "Client Name", "Client ID", "Quote", "Milestone", "Payment Date", "Amount Paid", "Current Balance", "Clearance Status"];
     
     const rows = (payments || []).map(b => {
       const client = (clients || []).find(c => c.node_id === b.client_id);
@@ -173,6 +263,8 @@ export function Billing() {
         b.method,
         client?.name || 'N/A',
         b.client_id,
+        b.quote_number || '',
+        b.billing_milestone_title || '',
         b.date,
         b.amount,
         balance,
@@ -253,7 +345,14 @@ export function Billing() {
                     value={formData.client_id ? (selectedClient?.name || formData.client_id) : clientSearch}
                     onChange={e => {
                       setClientSearch(e.target.value);
-                      if (formData.client_id) setFormData({...formData, client_id: ''});
+                      if (formData.client_id) setFormData({
+                        ...formData,
+                        client_id: '',
+                        billing_promise_id: '',
+                        quote_id: '',
+                        quote_number: '',
+                        billing_milestone_title: '',
+                      });
                       setIsClientDropdownOpen(true);
                     }}
                     onFocus={() => setIsClientDropdownOpen(true)}
@@ -264,7 +363,14 @@ export function Billing() {
                     <button 
                       type="button"
                       onClick={() => {
-                        setFormData({...formData, client_id: ''});
+                        setFormData({
+                          ...formData,
+                          client_id: '',
+                          billing_promise_id: '',
+                          quote_id: '',
+                          quote_number: '',
+                          billing_milestone_title: '',
+                        });
                         setClientSearch('');
                       }}
                       className="absolute right-3 p-1 hover:text-red-500"
@@ -290,7 +396,14 @@ export function Billing() {
                           key={c.node_id}
                           type="button"
                           onClick={() => {
-                            setFormData({...formData, client_id: c.node_id});
+                            setFormData({
+                              ...formData,
+                              client_id: c.node_id,
+                              billing_promise_id: '',
+                              quote_id: '',
+                              quote_number: '',
+                              billing_milestone_title: '',
+                            });
                             setIsClientDropdownOpen(false);
                             setClientSearch(c.name);
                           }}
@@ -370,6 +483,45 @@ export function Billing() {
                     />
                   </div>
                 </motion.div>
+              )}
+
+              {selectedClient && openClientPromises.length > 0 && (
+                <div>
+                  <label className="text-[10px] font-black text-text-dim uppercase tracking-[0.2em] mb-2 block">Billing Milestone</label>
+                  <select
+                    value={formData.billing_promise_id}
+                    onChange={event => {
+                      const promise = openClientPromises.find(item => String(item.id || item.pb_id) === event.target.value);
+                      setFormData({
+                        ...formData,
+                        billing_promise_id: event.target.value,
+                        quote_id: promise?.quote_id || '',
+                        quote_number: promise?.quote_number || '',
+                        billing_milestone_title: promise?.milestone_title || '',
+                        amount: promise ? String(promise.amount_due) : formData.amount,
+                      });
+                    }}
+                    className="w-full rounded-xl border border-white/10 bg-bg-deep px-4 py-3 text-xs font-black uppercase text-text-main outline-none focus:border-accent-green"
+                  >
+                    <option value="">General payment / no quote milestone</option>
+                    {openClientPromises.map(promise => (
+                      <option key={String(promise.id || promise.pb_id)} value={String(promise.id || promise.pb_id)}>
+                        {(promise.quote_number || 'Billing')} - {promise.milestone_title || 'Milestone'} - KSh {(Number(promise.amount_due) || 0).toLocaleString()}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedPromise && (
+                    <div className="mt-3 rounded-2xl border border-accent-green/20 bg-accent-green/5 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-accent-green">{selectedPromise.quote_number || 'Quote Billing'}</p>
+                          <p className="mt-1 text-xs font-black uppercase text-text-main">{selectedPromise.milestone_title || 'Billing milestone'}</p>
+                        </div>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-text-dim">Due {selectedPromise.due_date}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               <div>
@@ -459,10 +611,11 @@ export function Billing() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
           { label: 'Total Collected', value: `KSh ${((payments || []).reduce((acc: number, p: any) => acc + (p.status === 'completed' ? p.amount : 0), 0)).toLocaleString()}` },
           { label: 'Transactions', value: `${(payments || []).length}` },
+          { label: 'Pending Milestones', value: `${(billingPromises || []).filter(promise => promise.status === 'pending').length}` },
           { label: 'This Month', value: (() => {
             const now = new Date();
             const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -510,11 +663,12 @@ export function Billing() {
                 <th className="px-8 py-6">Txn Status</th>
                 <th className="px-8 py-6">Transaction Reference</th>
                 <th className="px-8 py-6">Client Profile</th>
+                <th className="px-8 py-6">Quote/Milestone</th>
                 <th className="px-8 py-6 text-center">Payment Date</th>
                 <th className="px-8 py-6 text-right">Amount Paid</th>
                 <th className="px-8 py-6 text-right">Current Balance</th>
                 <th className="px-8 py-6 text-center">Clearance</th>
-                <th className="px-8 py-6 text-center">Action</th>
+                <th className="px-8 py-6 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -558,6 +712,16 @@ export function Billing() {
                         <span className="text-[8px] font-bold text-text-dim/60 uppercase">{b.client_id}</span>
                       </div>
                     </td>
+                    <td className="px-8 py-6">
+                      {b.quote_number || b.billing_milestone_title ? (
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black uppercase text-text-main">{b.quote_number || 'Linked Billing'}</span>
+                          <span className="max-w-[180px] truncate text-[8px] font-bold uppercase tracking-widest text-text-dim/60">{b.billing_milestone_title || 'Milestone settlement'}</span>
+                        </div>
+                      ) : (
+                        <span className="text-[8px] font-black uppercase tracking-widest text-text-dim/30">General</span>
+                      )}
+                    </td>
                     <td className="px-8 py-6 text-center text-[10px] text-text-dim font-black tracking-widest uppercase">{b.date}</td>
                     <td className="px-8 py-6 text-right font-black text-sm text-text-main group-hover:text-accent-green transition-colors">KSh {(b.amount || 0).toLocaleString()}</td>
                     <td className="px-8 py-6 text-right font-black text-sm text-text-main">
@@ -585,12 +749,12 @@ export function Billing() {
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => handleDelete(b)}
-                          disabled={deletingId === b.id}
+                          onClick={() => setPaymentPendingDelete(b)}
+                          disabled={deletingId === String(b.id || b.pb_id || b.transaction_id)}
                           className="p-2 rounded-xl bg-red-500/5 border border-red-500/10 text-red-500/40 hover:bg-red-500/15 hover:text-red-500 hover:border-red-500/30 transition-all disabled:opacity-30 group/del"
                           title="Delete payment"
                         >
-                          {deletingId === b.id
+                          {deletingId === String(b.id || b.pb_id || b.transaction_id)
                             ? <Clock className="w-3.5 h-3.5 animate-spin" />
                             : <Trash2 className="w-3.5 h-3.5" />}
                         </button>
@@ -642,6 +806,87 @@ export function Billing() {
           </div>
         </div>
       )}
+      <AnimatePresence>
+        {paymentPendingDelete && (
+          <DeletePaymentNotice
+            payment={paymentPendingDelete}
+            isDeleting={deletingId === String(paymentPendingDelete.id || paymentPendingDelete.pb_id || paymentPendingDelete.transaction_id)}
+            onCancel={() => setPaymentPendingDelete(null)}
+            onConfirm={handleDelete}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function DeletePaymentNotice({
+  payment,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: {
+  payment: any;
+  isDeleting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onCancel}
+        className="absolute inset-0 bg-bg-deep/80 backdrop-blur-xl"
+      />
+      <motion.div
+        initial={{ opacity: 0, y: 18, scale: 0.96 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 18, scale: 0.96 }}
+        className="relative w-full max-w-md overflow-hidden rounded-3xl border border-red-500/20 bg-bg-deep shadow-[0_24px_80px_rgba(0,0,0,0.55)]"
+      >
+        <div className="absolute inset-x-0 top-0 h-1 bg-red-500" />
+        <div className="p-7">
+          <div className="mb-6 flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-red-500/25 bg-red-500/10 text-red-400">
+              <AlertCircle className="h-6 w-6" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-red-400">Delete Settlement</p>
+              <h2 className="mt-2 text-2xl font-black uppercase tracking-tight text-text-main">Confirm Removal</h2>
+              <p className="mt-3 text-sm font-medium leading-relaxed text-text-dim">
+                This will permanently remove payment <span className="font-black text-text-main">{payment.transaction_id}</span>.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-text-dim">Amount</p>
+            <p className="mt-1 text-xl font-black text-accent-green">KSh {(Number(payment.amount) || 0).toLocaleString()}</p>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-widest text-text-dim">{payment.client_id} · {payment.date}</p>
+          </div>
+
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isDeleting}
+              className="rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-text-main transition-all hover:bg-white/10 disabled:opacity-50"
+            >
+              Keep Payment
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isDeleting}
+              className="rounded-xl border border-red-500/30 bg-red-500 px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-white transition-all hover:brightness-110 disabled:opacity-50"
+            >
+              {isDeleting ? 'Deleting...' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }
