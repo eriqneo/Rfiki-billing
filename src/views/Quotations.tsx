@@ -220,8 +220,8 @@ export function Quotations() {
     }
   };
 
-  const handlePdf = (quote: Quotation) => {
-    exportQuotationPdf(quote, business?.[0]);
+  const handlePdf = async (quote: Quotation) => {
+    await exportQuotationPdf(quote, business?.[0]);
   };
 
   const handleCardStatusChange = async (quote: Quotation, nextStatus: Quotation['status']) => {
@@ -1133,6 +1133,38 @@ function getImageType(dataUrl: string) {
   return 'PNG';
 }
 
+function createCircularLogoDataUrl(dataUrl: string, size = 256) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context unavailable'));
+        return;
+      }
+
+      ctx.clearRect(0, 0, size, size);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+      ctx.clip();
+
+      const scale = Math.max(size / image.width, size / image.height);
+      const drawWidth = image.width * scale;
+      const drawHeight = image.height * scale;
+      ctx.drawImage(image, (size - drawWidth) / 2, (size - drawHeight) / 2, drawWidth, drawHeight);
+      ctx.restore();
+
+      resolve(canvas.toDataURL('image/png'));
+    };
+    image.onerror = () => reject(new Error('Logo image could not be loaded'));
+    image.src = dataUrl;
+  });
+}
+
 function drawPdfFooter(doc: jsPDF, quoteNumber: string) {
   const pageHeight = doc.internal.pageSize.getHeight();
   doc.setDrawColor(230, 230, 230);
@@ -1144,30 +1176,59 @@ function drawPdfFooter(doc: jsPDF, quoteNumber: string) {
   doc.setTextColor(0, 0, 0);
 }
 
-function drawLogoMark(doc: jsPDF, business?: BusinessProfile) {
-  const badge = { x: 146, y: 11, radius: 8 };
-  const centerX = badge.x + badge.radius;
-  const centerY = badge.y + badge.radius;
-  doc.setFillColor(18, 18, 18);
-  doc.circle(centerX, centerY, badge.radius, 'F');
+async function drawLogoMark(doc: jsPDF, business?: BusinessProfile) {
+  const zoneX = 148;
+  const zoneY = 8;
+  const zoneW = 24;
+  const zoneH = 24;
+  const centerX = zoneX + zoneW / 2;
+  const centerY = zoneY + zoneH / 2;
+  const radius = zoneW / 2;
+
+  doc.setFillColor(13, 13, 13);
+  doc.circle(centerX, centerY, radius, 'F');
 
   if (business?.logo_base64) {
     try {
-      const image = doc.getImageProperties(business.logo_base64);
-      const maxSize = badge.radius * 1.25;
-      const ratio = Math.min(maxSize / image.width, maxSize / image.height);
-      const width = image.width * ratio;
-      const height = image.height * ratio;
-      doc.addImage(business.logo_base64, getImageType(business.logo_base64), centerX - width / 2, centerY - height / 2, width, height);
+      const roundLogo = await createCircularLogoDataUrl(business.logo_base64);
+      const imageSize = 20.2;
+      doc.addImage(
+        roundLogo,
+        'PNG',
+        centerX - imageSize / 2,
+        centerY - imageSize / 2,
+        imageSize,
+        imageSize
+      );
+
+      doc.setDrawColor(235, 238, 242);
+      doc.setLineWidth(0.7);
+      doc.circle(centerX, centerY, radius + 0.7, 'S');
+      doc.setDrawColor(18, 18, 18);
+      doc.setLineWidth(0.9);
+      doc.circle(centerX, centerY, radius - 1, 'S');
       return;
     } catch {
-      // Fall back to business initials below.
+      // Fall through to monogram
     }
   }
 
-  doc.setTextColor(57, 255, 20);
-  doc.setFontSize(6);
-  doc.text((business?.name || 'RB').slice(0, 2).toUpperCase(), centerX, centerY + 2, { align: 'center' });
+  // Institutional Monogram Fallback
+  const initials = (business?.name || 'RB')
+    .split(' ')
+    .slice(0, 2)
+    .map(word => word[0])
+    .join('')
+    .toUpperCase();
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(40, 45, 55);
+  doc.text(initials, centerX, centerY + 3.5, { align: 'center' });
+
+  doc.setDrawColor(220, 225, 230);
+  doc.setLineWidth(0.5);
+  doc.circle(centerX, centerY, radius, 'S');
   doc.setTextColor(0, 0, 0);
 }
 
@@ -1191,7 +1252,7 @@ function drawInfoCard(doc: jsPDF, title: string, lines: string[], x: number, y: 
   doc.setTextColor(0, 0, 0);
 }
 
-function drawQuotationHeader(doc: jsPDF, quote: Quotation, business?: BusinessProfile) {
+async function drawQuotationHeader(doc: jsPDF, quote: Quotation, business?: BusinessProfile) {
   doc.setTextColor(20, 20, 20);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(16);
@@ -1206,45 +1267,108 @@ function drawQuotationHeader(doc: jsPDF, quote: Quotation, business?: BusinessPr
   doc.text(quote.quote_number, 42, 27);
   doc.text(normalizeDateInput(quote.issue_date), 42, 36);
 
-  drawLogoMark(doc, business);
+  await drawLogoMark(doc, business);
   doc.setTextColor(18, 18, 18);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(12);
-  doc.text(business?.name || 'Rafiki Business Manager', 170, 15, { maxWidth: 26 });
+  doc.setFontSize(11);
+  // Positioned to the right of the logo (Logo ends at 172)
+  const bizName = business?.name || 'Rafiki Business Manager';
+  const nameLines = doc.splitTextToSize(bizName, 36);
+  doc.text(nameLines, 175, 16, { align: 'left' });
+
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(100, 100, 100);
-  if (business?.website) doc.text(business.website, 170, 26, { maxWidth: 26 });
+
+  // Calculate dynamic offset based on name height (approx 4.5mm per line)
+  let contactY = 16 + (nameLines.length * 4.5) + 1.5;
+
+  if (business?.phone) {
+    doc.text(`Tel: ${business.phone}`, 175, contactY);
+    contactY += 4.5;
+  }
+  if (business?.website) {
+    doc.text(business.website, 175, contactY, { maxWidth: 36 });
+  }
   doc.setTextColor(0, 0, 0);
 
   const byLines = [
-    business?.name || 'Rafiki Business Manager',
-    business?.address || '',
-    business?.phone || '',
-    business?.email || '',
-    business?.website || '',
-    business?.till_number ? `Till/Paybill: ${business.till_number}` : '',
+    business?.name || 'Rafiki Code Solutions',
+    business?.address || 'Nairobi, Kenya',
+    business?.phone || 'Contact Number Not Set',
+    business?.email || business?.website || 'www.rafikicode.com',
+    business?.till_number ? `Till: ${business.till_number}` : '',
   ];
   const toLines = [
-    quote.prospect_name || 'Prospect',
+    quote.prospect_name || 'Valued Client',
     quote.prospect_email || '',
     quote.prospect_phone || '',
     quote.project_title ? `Project: ${quote.project_title}` : '',
     quote.valid_until ? `Valid until: ${normalizeDateInput(quote.valid_until)}` : '',
   ];
 
-  drawInfoCard(doc, 'Quotation by', byLines, 14, 51, 84, 36);
-  drawInfoCard(doc, 'Quotation to', toLines, 108, 51, 88, 36);
+  drawInfoCard(doc, 'Quotation by', byLines, 14, 51, 84, 46);
+  drawInfoCard(doc, 'Quotation to', toLines, 108, 51, 88, 46);
 }
 
-function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) {
+function drawBusinessStamp(doc: jsPDF, business?: BusinessProfile, x = 16, y = 0) {
+  const date = new Date();
+  const stampDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+  const company = (business?.name || 'Rafiki Business').toUpperCase();
+  const phone = business?.phone || business?.till_number || 'N/A';
+  const address = (business?.address || business?.website || 'NAIROBI, KENYA').toUpperCase();
+  const blue = [0, 38, 255] as const;
+  const width = 78; // Matched to totals box width
+  const height = 42; // Optimized height for balance
+  const centerX = x + width / 2;
+
+  doc.setDrawColor(...blue);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(x, y, width, height, 4, 4, 'S');
+  doc.setLineWidth(0.3);
+  doc.roundedRect(x + 1.2, y + 1.2, width - 2.4, height - 2.4, 3.2, 3.2, 'S');
+
+  // Company name
+  doc.setTextColor(...blue);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.text(doc.splitTextToSize(company, width - 8).slice(0, 1), centerX, y + 8.5, { align: 'center' });
+
+  // Subtitle
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(6.5);
+  doc.text('Official Business Seal', centerX, y + 14, { align: 'center' });
+
+  // Date stamp — red
+  doc.setTextColor(255, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text(stampDate, centerX, y + 24, { align: 'center' });
+
+  // Tel
+  doc.setTextColor(...blue);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.text(`Tel: ${phone}`, centerX, y + 33, { align: 'center' });
+
+  // Address
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7);
+  doc.text(doc.splitTextToSize(address, width - 6).slice(0, 1), centerX, y + 39, { align: 'center' });
+
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'normal');
+  doc.setLineWidth(0.2);
+}
+
+async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) {
   const doc = new jsPDF();
   const currency = quote.currency || 'KSh';
   const items = parseQuoteItems(quote.items_json);
   const terms = parseQuotationTerms(quote.terms_json);
-  let y = 96;
+  let y = 106;
 
-  drawQuotationHeader(doc, quote, business);
+  await drawQuotationHeader(doc, quote, business);
 
   doc.setFillColor(20, 20, 20);
   doc.setTextColor(255, 255, 255);
@@ -1288,6 +1412,11 @@ function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) {
   });
 
   y += 8;
+  if (y > 210) {
+    drawPdfFooter(doc, quote.quote_number);
+    doc.addPage();
+    y = 28;
+  }
   const totalsY = y;
   doc.setDrawColor(230, 230, 230);
   doc.setFillColor(248, 248, 248);
@@ -1309,8 +1438,13 @@ function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) {
   doc.setTextColor(20, 20, 20);
   doc.text('Total', 124, y);
   doc.text(formatMoney(Number(quote.total) || 0, currency), 190, y, { align: 'right' });
+  const totalsPage = doc.getNumberOfPages();
+  // Stamp positioned to the LEFT of the totals box, perfectly aligned to baseline
+  const stampPosition = { x: 14, y: totalsY - 10 };
 
-  y += 18;
+  const stampBottom = stampPosition.y + 44;
+  y = Math.max(y + 18, stampBottom + 8);
+
   if (y > 230) {
     drawPdfFooter(doc, quote.quote_number);
     doc.addPage();
@@ -1349,6 +1483,10 @@ function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) {
     doc.text(quote.notes, 14, y, { maxWidth: 178 });
   }
 
+  const finalPage = doc.getNumberOfPages();
+  doc.setPage(totalsPage);
+  drawBusinessStamp(doc, business, stampPosition.x, stampPosition.y);
+  doc.setPage(finalPage);
   drawPdfFooter(doc, quote.quote_number);
   doc.save(`${quote.quote_number || 'quotation'}.pdf`);
 }

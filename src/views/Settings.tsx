@@ -872,7 +872,7 @@ export function Settings() {
               <label className="text-[10px] font-black text-text-dim uppercase tracking-widest">Business Logo</label>
               <div className="flex items-center gap-4">
                 {bizLogo ? (
-                  <div className="w-16 h-16 rounded-xl border border-white/10 overflow-hidden shrink-0 bg-white/5 relative group">
+                  <div className="w-16 h-16 rounded-full border border-accent-green/25 overflow-hidden shrink-0 bg-bg-deep relative group shadow-[0_0_14px_rgba(57,255,20,0.18)]">
                     <img src={bizLogo} alt="Logo" className="w-full h-full object-cover" />
                     <button
                       onClick={() => setBizLogo('')}

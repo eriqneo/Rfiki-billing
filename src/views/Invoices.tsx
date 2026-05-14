@@ -492,6 +492,7 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile) {
   doc.setFontSize(14);
   doc.text('Total Due', pageWidth - 210, y);
   doc.text(money(invoice.total, currency), pageWidth - 62, y, { align: 'right' });
+  drawBusinessStamp(doc, business, 48, y - 52);
 
   if (invoice.notes) {
     doc.setFontSize(9);
@@ -500,4 +501,42 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile) {
   }
 
   doc.save(`${invoice.invoice_number}.pdf`);
+}
+
+function drawBusinessStamp(doc: jsPDF, business?: BusinessProfile, x = 48, y = 0) {
+  const date = new Date();
+  const stampDate = date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+  const company = (business?.name || 'Rafiki Business').toUpperCase();
+  const phone = business?.phone || business?.till_number || 'N/A';
+  const address = (business?.address || business?.website || 'NAIROBI, KENYA').toUpperCase();
+  const blue = [0, 38, 255] as const;
+  const width = 210;
+  const height = 88;
+  const centerX = x + width / 2;
+
+  doc.setDrawColor(...blue);
+  doc.setLineWidth(2.2);
+  doc.roundedRect(x, y, width, height, 14, 14, 'S');
+  doc.setLineWidth(0.8);
+  doc.roundedRect(x + 4, y + 4, width - 8, height - 8, 10, 10, 'S');
+  doc.setTextColor(...blue);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.text(doc.splitTextToSize(company, width - 18).slice(0, 1), centerX, y + 26, { align: 'center' });
+  doc.setFont('helvetica', 'italic');
+  doc.setFontSize(10.5);
+  doc.text('Official Business Seal', centerX, y + 41, { align: 'center' });
+  doc.setTextColor(255, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  doc.text(stampDate, centerX, y + 59, { align: 'center' });
+  doc.setTextColor(...blue);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(11.5);
+  doc.text(`Tel: ${phone}`, centerX, y + 74, { align: 'center' });
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text(doc.splitTextToSize(address, width - 12).slice(0, 1), centerX, y + 84, { align: 'center' });
+  doc.setTextColor(0, 0, 0);
+  doc.setLineWidth(0.2);
 }

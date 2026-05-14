@@ -101,18 +101,20 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
         theme === 'light' ? "bg-white border-slate-200 shadow-sm" : "glass-panel border-white/5",
         !isOpen && "-translate-x-full"
       )}>
-        <div className="flex flex-col h-full py-8">
-          <div className="px-8 pb-10 flex items-center justify-start min-h-[5rem]">
+        <div className="flex h-full min-h-0 flex-col overflow-y-auto overscroll-contain py-6">
+          <div className="shrink-0 px-8 pb-8 flex items-center justify-start min-h-[5rem]">
             {isPb && bizLoading && !bizLogo ? (
               // Premium skeleton — pulse while waiting for logo
               <div className="w-32 h-10 rounded-lg bg-white/5 animate-pulse" />
             ) : bizLogo ? (
-              <img
-                src={bizLogo}
-                alt={bizName}
-                className="max-h-16 md:max-h-20 w-auto max-w-full object-contain drop-shadow-[0_0_8px_rgba(57,255,20,0.5)] transition-opacity duration-300"
-                style={{ opacity: bizLogo ? 1 : 0 }}
-              />
+              <div className="h-20 w-20 overflow-hidden rounded-full border border-accent-green/25 bg-bg-deep shadow-[0_0_18px_rgba(57,255,20,0.22)]">
+                <img
+                  src={bizLogo}
+                  alt={bizName}
+                  className="h-full w-full object-cover transition-opacity duration-300"
+                  style={{ opacity: bizLogo ? 1 : 0 }}
+                />
+              </div>
             ) : (
               <h1 className="text-2xl font-bold text-accent-green tracking-tighter drop-shadow-[0_0_8px_rgba(57,255,20,0.5)] truncate transition-opacity duration-300">{bizName}</h1>
             )}
@@ -145,7 +147,7 @@ export function Sidebar({ currentView, setView, isSyncing }: SidebarProps) {
             })}
           </nav>
 
-          <div className="px-6 space-y-4 pt-6 mt-auto">
+          <div className="shrink-0 px-6 space-y-4 pt-6 pb-2 mt-auto">
             {/* The old offline/online chip was removed in favor of the user badge indicator */}
 
             {isSyncing && (
