@@ -15,7 +15,8 @@
     "pb:setup-quotations": "tsx scripts/ensure-pocketbase-quotations.ts",
     "pb:setup-business": "tsx scripts/ensure-pocketbase-business.ts",
     "pb:setup-billing-links": "tsx scripts/ensure-pocketbase-billing-links.ts",
-    "pb:setup-invoices": "tsx scripts/ensure-pocketbase-invoices.ts"
+    "pb:setup-invoices": "tsx scripts/ensure-pocketbase-invoices.ts",
+    "pb:reconcile-payments": "tsx scripts/reconcile-pocketbase-payments.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

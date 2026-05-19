@@ -1236,18 +1236,18 @@ function drawInfoCard(doc: jsPDF, title: string, lines: string[], x: number, y: 
   doc.setDrawColor(238, 241, 245);
   doc.setFillColor(247, 249, 251);
   doc.roundedRect(x, y, width, height, 2, 2, 'FD');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setTextColor(20, 20, 20);
   doc.setFont('helvetica', 'bold');
-  doc.text(title, x + 4, y + 7);
+  doc.text(title, x + 4, y + 6.5);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.2);
   doc.setTextColor(28, 28, 28);
 
-  let lineY = y + 13;
+  let lineY = y + 12;
   for (const line of lines.filter(Boolean).slice(0, 6)) {
     doc.text(line, x + 4, lineY, { maxWidth: width - 8 });
-    lineY += 4.4;
+    lineY += 4;
   }
   doc.setTextColor(0, 0, 0);
 }
@@ -1307,8 +1307,8 @@ async function drawQuotationHeader(doc: jsPDF, quote: Quotation, business?: Busi
     quote.valid_until ? `Valid until: ${normalizeDateInput(quote.valid_until)}` : '',
   ];
 
-  drawInfoCard(doc, 'Quotation by', byLines, 14, 51, 84, 46);
-  drawInfoCard(doc, 'Quotation to', toLines, 108, 51, 88, 46);
+  drawInfoCard(doc, 'Quotation by', byLines, 14, 48, 84, 40);
+  drawInfoCard(doc, 'Quotation to', toLines, 108, 48, 88, 40);
 }
 
 function drawBusinessStamp(doc: jsPDF, business?: BusinessProfile, x = 16, y = 0) {
@@ -1366,7 +1366,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
   const currency = quote.currency || 'KSh';
   const items = parseQuoteItems(quote.items_json);
   const terms = parseQuotationTerms(quote.terms_json);
-  let y = 106;
+  let y = 96;
 
   await drawQuotationHeader(doc, quote, business);
 
@@ -1389,7 +1389,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
     }
     const descriptionLines = doc.splitTextToSize(item.description || 'Item', 88);
     const scopeLines = item.scope_summary ? doc.splitTextToSize(item.scope_summary, 88) : [];
-    const rowHeight = Math.max(14, descriptionLines.length * 4.8 + scopeLines.length * 4.2 + 7);
+    const rowHeight = Math.max(12, descriptionLines.length * 4.4 + scopeLines.length * 3.8 + 6);
     if (index % 2 === 0) {
       doc.setFillColor(250, 250, 250);
       doc.rect(14, y - 5, 182, rowHeight, 'F');
@@ -1400,7 +1400,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
     if (scopeLines.length > 0) {
       doc.setTextColor(95, 95, 95);
       doc.setFontSize(7.6);
-      doc.text(scopeLines, 18, y + descriptionLines.length * 4.8 + 1);
+      doc.text(scopeLines, 18, y + descriptionLines.length * 4.4 + 1);
     }
     doc.setTextColor(80, 80, 80);
     doc.setFontSize(9);
@@ -1411,7 +1411,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
     y += rowHeight;
   });
 
-  y += 8;
+  y += 5;
   if (y > 210) {
     drawPdfFooter(doc, quote.quote_number);
     doc.addPage();
@@ -1420,7 +1420,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
   const totalsY = y;
   doc.setDrawColor(230, 230, 230);
   doc.setFillColor(248, 248, 248);
-  doc.roundedRect(118, totalsY - 6, 78, 38, 2.5, 2.5, 'FD');
+  doc.roundedRect(118, totalsY - 6, 78, 36, 2.5, 2.5, 'FD');
   doc.setFontSize(10);
   doc.setTextColor(90, 90, 90);
   doc.text('Subtotal', 124, y);
@@ -1443,7 +1443,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
   const stampPosition = { x: 14, y: totalsY - 10 };
 
   const stampBottom = stampPosition.y + 44;
-  y = Math.max(y + 18, stampBottom + 8);
+  y = Math.max(y + 14, stampBottom + 5);
 
   if (y > 230) {
     drawPdfFooter(doc, quote.quote_number);
@@ -1465,7 +1465,7 @@ async function exportQuotationPdf(quote: Quotation, business?: BusinessProfile) 
       y = 20;
     }
     doc.text(`- ${term}`, 14, y, { maxWidth: 178 });
-    y += 6;
+    y += 5.3;
   }
   if (quote.notes) {
     y += 5;

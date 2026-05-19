@@ -5,7 +5,7 @@ const adminEmail = process.env.POCKETBASE_ADMIN_EMAIL;
 const adminPassword = process.env.POCKETBASE_ADMIN_PASSWORD;
 const shouldApply = process.argv.includes('--apply');
 const expectedTotal = Number(process.env.POCKET_HOST_EXPECTED_TOTAL || 250);
-const stockPrefix = process.env.POCKET_HOST_STOCK_PREFIX || 'rafiki-host';
+const stockPrefix = process.env.POCKET_HOST_STOCK_PREFIX || 'host-unit-';
 
 function assertAdminCredentials() {
   if (!adminEmail || !adminPassword) {
@@ -29,6 +29,11 @@ function canonicalScore(record: any) {
   if (record.created_at) score += 1;
   if (record.updated) score += Date.parse(record.updated) / 1_000_000_000_000;
   return score;
+}
+
+function stockNumber(record: any) {
+  const match = hostKey(record).match(new RegExp(`^${stockPrefix.toLowerCase()}(\\d+)$`));
+  return match?.[1] ? Number(match[1]) : null;
 }
 
 async function pbRequest(path: string, options: RequestInit = {}) {
@@ -128,6 +133,19 @@ async function reconcilePocketHostInventory() {
       .map(Number)
   );
   const stockToCreate: number[] = [];
+  const surplusStockToDelete = totalAfterDedupe > expectedTotal
+    ? canonicalRecords
+        .filter(record => !isAssigned(record))
+        .map(record => ({ record, stockNumber: stockNumber(record) }))
+        .sort((a, b) => {
+          if (a.stockNumber !== null && b.stockNumber !== null) return b.stockNumber - a.stockNumber;
+          if (a.stockNumber !== null) return -1;
+          if (b.stockNumber !== null) return 1;
+          return canonicalScore(a.record) - canonicalScore(b.record);
+        })
+        .slice(0, totalAfterDedupe - expectedTotal)
+        .map(item => item.record)
+    : [];
 
   for (let i = 1; totalAfterDedupe + stockToCreate.length < expectedTotal; i++) {
     if (!existingNumericHosts.has(i)) {
@@ -140,11 +158,17 @@ async function reconcilePocketHostInventory() {
   console.log(`[PB] Assigned after dedupe: ${assignedAfterDedupe}`);
   console.log(`[PB] Available after dedupe: ${availableAfterDedupe}`);
   console.log(`[PB] Duplicate/blank records to delete: ${duplicatesToDelete.length}`);
+  console.log(`[PB] Surplus unassigned stock to delete: ${surplusStockToDelete.length}`);
   console.log(`[PB] Missing stock records to create: ${stockToCreate.length}`);
-  console.log(`[PB] Final planned total: ${totalAfterDedupe + stockToCreate.length}`);
+  console.log(`[PB] Final planned total: ${totalAfterDedupe - surplusStockToDelete.length + stockToCreate.length}`);
 
-  if (totalAfterDedupe + stockToCreate.length !== expectedTotal) {
-    console.warn(`[PB] Expected final total ${expectedTotal}, planned ${totalAfterDedupe + stockToCreate.length}. No records will be changed.`);
+  if (assignedAfterDedupe > expectedTotal) {
+    console.warn(`[PB] Assigned records (${assignedAfterDedupe}) exceed expected total (${expectedTotal}). No records will be changed.`);
+    process.exit(2);
+  }
+
+  if (totalAfterDedupe - surplusStockToDelete.length + stockToCreate.length !== expectedTotal) {
+    console.warn(`[PB] Expected final total ${expectedTotal}, planned ${totalAfterDedupe - surplusStockToDelete.length + stockToCreate.length}. No records will be changed.`);
     process.exit(2);
   }
 
@@ -161,6 +185,17 @@ async function reconcilePocketHostInventory() {
     });
     if ((i + 1) % 25 === 0 || i === duplicatesToDelete.length - 1) {
       console.log(`[PB] Deleted ${i + 1}/${duplicatesToDelete.length}`);
+    }
+  }
+
+  for (let i = 0; i < surplusStockToDelete.length; i++) {
+    const record = surplusStockToDelete[i];
+    await pbRequest(`/api/collections/pocket_host_instances/records/${record.id}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if ((i + 1) % 25 === 0 || i === surplusStockToDelete.length - 1) {
+      console.log(`[PB] Deleted surplus stock ${i + 1}/${surplusStockToDelete.length}`);
     }
   }
 

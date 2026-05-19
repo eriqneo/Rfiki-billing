@@ -927,17 +927,17 @@ function drawInvoiceInfoCard(doc: jsPDF, title: string, lines: string[], x: numb
   doc.setFillColor(247, 249, 251);
   doc.roundedRect(x, y, width, height, 8, 8, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
+  doc.setFontSize(9.5);
   doc.setTextColor(18, 18, 18);
-  doc.text(title, x + 14, y + 20);
+  doc.text(title, x + 14, y + 18);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
+  doc.setFontSize(8);
   doc.setTextColor(35, 35, 35);
 
-  let lineY = y + 38;
+  let lineY = y + 34;
   for (const line of lines.filter(Boolean).slice(0, 6)) {
     doc.text(line, x + 14, lineY, { maxWidth: width - 28 });
-    lineY += 13;
+    lineY += 11.5;
   }
   doc.setTextColor(0, 0, 0);
 }
@@ -1019,36 +1019,36 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
   doc.setTextColor(18, 18, 18);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(26);
-  doc.text('Invoice', 48, 66);
+  doc.text('Invoice', 48, 56);
 
   doc.setTextColor(120, 120, 120);
   doc.setFontSize(9);
-  doc.text('Invoice #', 48, 104);
-  doc.text('Invoice Date', 48, 128);
+  doc.text('Invoice #', 48, 90);
+  doc.text('Invoice Date', 48, 110);
   doc.setTextColor(25, 25, 25);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text(invoice.invoice_number, 150, 104);
-  doc.text(invoice.issue_date, 150, 128);
+  doc.text(invoice.invoice_number, 150, 90);
+  doc.text(invoice.issue_date, 150, 110);
 
   const identityX = pageWidth - 246;
   const logoX = identityX;
   const textX = identityX + 86;
   const textMaxWidth = pageWidth - textX - 48;
 
-  drawInvoiceLogo(doc, business, logoX, 38);
+  drawInvoiceLogo(doc, business, logoX, 30);
   doc.setTextColor(18, 18, 18);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
   const businessNameLines = doc.splitTextToSize(business?.name || 'Rafiki Business Manager', textMaxWidth);
-  doc.text(businessNameLines.slice(0, 3), textX, 60);
+  doc.text(businessNameLines.slice(0, 3), textX, 50);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
   doc.setTextColor(100, 100, 100);
-  let businessContactY = 64 + (Math.min(businessNameLines.length, 3) * 14);
+  let businessContactY = 54 + (Math.min(businessNameLines.length, 3) * 13);
   if (business?.phone) {
     doc.text(`Tel: ${business.phone}`, textX, businessContactY, { maxWidth: textMaxWidth });
-    businessContactY += 13;
+    businessContactY += 11;
   }
   if (business?.website) {
     doc.text(business.website, textX, businessContactY, { maxWidth: textMaxWidth });
@@ -1069,12 +1069,12 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
     `Due date: ${invoice.due_date}`,
   ];
 
-  drawInvoiceInfoCard(doc, 'Invoice by', byLines, 48, 172, 220, 120);
-  drawInvoiceInfoCard(doc, 'Invoice to', toLines, 308, 172, 239, 120);
+  drawInvoiceInfoCard(doc, 'Invoice by', byLines, 48, 140, 220, 96);
+  drawInvoiceInfoCard(doc, 'Invoice to', toLines, 308, 140, 239, 96);
 
-  let y = 338;
+  let y = 284;
   doc.setFillColor(20, 20, 20);
-  doc.roundedRect(48, y - 24, pageWidth - 96, 34, 7, 7, 'F');
+  doc.roundedRect(48, y - 21, pageWidth - 96, 30, 7, 7, 'F');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.setTextColor(255, 255, 255);
@@ -1082,28 +1082,28 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
   doc.text('Qty', pageWidth - 190, y, { align: 'right' });
   doc.text('Amount', pageWidth - 62, y, { align: 'right' });
   doc.setFont('helvetica', 'normal');
-  y += 34;
+  y += 28;
   displayItems.forEach((item, index) => {
     const descriptionLines = doc.splitTextToSize(item.description, 315);
-    const rowHeight = Math.max(36, descriptionLines.length * 12 + 18);
+    const rowHeight = Math.max(30, descriptionLines.length * 10.5 + 14);
     if (y + rowHeight > pageHeight - 150) {
       drawInvoiceFooter(doc, invoice.invoice_number);
       doc.addPage();
       y = 70;
       doc.setFillColor(20, 20, 20);
-      doc.roundedRect(48, y - 24, pageWidth - 96, 34, 7, 7, 'F');
+      doc.roundedRect(48, y - 21, pageWidth - 96, 30, 7, 7, 'F');
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9);
       doc.setTextColor(255, 255, 255);
       doc.text('Description', 62, y);
       doc.text('Qty', pageWidth - 190, y, { align: 'right' });
       doc.text('Amount', pageWidth - 62, y, { align: 'right' });
-      y += 34;
+      y += 28;
     }
 
     if (index % 2 === 0) {
       doc.setFillColor(250, 250, 250);
-      doc.rect(48, y - 16, pageWidth - 96, rowHeight, 'F');
+      doc.rect(48, y - 14, pageWidth - 96, rowHeight, 'F');
     }
     doc.setTextColor(18, 18, 18);
     doc.setFont('helvetica', 'bold');
@@ -1118,7 +1118,7 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
     y += rowHeight;
   });
 
-  y += 22;
+  y += 14;
   if (y > pageHeight - 210) {
     drawInvoiceFooter(doc, invoice.invoice_number);
     doc.addPage();
@@ -1130,7 +1130,7 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
   const summaryW = 230;
   doc.setDrawColor(225, 230, 235);
   doc.setFillColor(248, 250, 252);
-  doc.roundedRect(summaryX, summaryY - 20, summaryW, 142, 8, 8, 'FD');
+  doc.roundedRect(summaryX, summaryY - 16, summaryW, 126, 8, 8, 'FD');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(40, 45, 55);
@@ -1138,38 +1138,38 @@ function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9.5);
   doc.setTextColor(70, 75, 85);
-  y += 18;
+  y += 16;
   doc.text('Subtotal', summaryX + 16, y);
   doc.text(money(dueSummary.projectSubtotal, currency), summaryX + summaryW - 16, y, { align: 'right' });
-  y += 16;
+  y += 14;
   doc.text('Paid', summaryX + 16, y);
   doc.text(money(safePaid, currency), summaryX + summaryW - 16, y, { align: 'right' });
-  y += 16;
+  y += 14;
   doc.text('Account Balance', summaryX + 16, y);
   doc.text(money(safeBalance, currency), summaryX + summaryW - 16, y, { align: 'right' });
-  y += 16;
+  y += 14;
   doc.text(`VAT Tax (${invoice.tax_rate || 0}%)`, summaryX + 16, y);
   doc.text(money(safeTax, currency), summaryX + summaryW - 16, y, { align: 'right' });
-  y += 18;
+  y += 16;
   doc.setDrawColor(220, 225, 230);
   doc.line(summaryX + 16, y - 10, summaryX + summaryW - 16, y - 10);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(20, 20, 20);
-  doc.setFontSize(14);
-  doc.text('Total Due', summaryX + 16, y + 4);
-  doc.text(money(safeTotalDue, currency), summaryX + summaryW - 16, y + 4, { align: 'right' });
+  doc.setFontSize(13);
+  doc.text('Total Due', summaryX + 16, y + 3);
+  doc.text(money(safeTotalDue, currency), summaryX + summaryW - 16, y + 3, { align: 'right' });
 
-  y = summaryY + 142;
+  y = summaryY + 126;
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
 
-  drawBusinessStamp(doc, business, 48, summaryY - 14);
+  drawBusinessStamp(doc, business, 48, summaryY - 10);
 
   if (invoice.notes) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(55, 65, 75);
-    doc.text(doc.splitTextToSize(invoice.notes, pageWidth - 96), 48, y + 30);
+    doc.text(doc.splitTextToSize(invoice.notes, pageWidth - 96), 48, y + 22);
   }
 
   drawInvoiceFooter(doc, invoice.invoice_number);
@@ -1183,8 +1183,8 @@ function drawBusinessStamp(doc: jsPDF, business?: BusinessProfile, x = 48, y = 0
   const phone = business?.phone || business?.till_number || 'N/A';
   const address = (business?.address || business?.website || 'NAIROBI, KENYA').toUpperCase();
   const blue = [0, 38, 255] as const;
-  const width = 210;
-  const height = 88;
+  const width = 190;
+  const height = 78;
   const centerX = x + width / 2;
 
   doc.setDrawColor(...blue);
@@ -1194,22 +1194,22 @@ function drawBusinessStamp(doc: jsPDF, business?: BusinessProfile, x = 48, y = 0
   doc.roundedRect(x + 4, y + 4, width - 8, height - 8, 10, 10, 'S');
   doc.setTextColor(...blue);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text(doc.splitTextToSize(company, width - 18).slice(0, 1), centerX, y + 26, { align: 'center' });
+  doc.setFontSize(20);
+  doc.text(doc.splitTextToSize(company, width - 18).slice(0, 1), centerX, y + 23, { align: 'center' });
   doc.setFont('helvetica', 'italic');
-  doc.setFontSize(10.5);
-  doc.text('Official Business Seal', centerX, y + 41, { align: 'center' });
+  doc.setFontSize(9.5);
+  doc.text('Official Business Seal', centerX, y + 36, { align: 'center' });
   doc.setTextColor(255, 0, 0);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(20);
-  doc.text(stampDate, centerX, y + 59, { align: 'center' });
+  doc.setFontSize(18);
+  doc.text(stampDate, centerX, y + 52, { align: 'center' });
   doc.setTextColor(...blue);
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(11.5);
-  doc.text(`Tel: ${phone}`, centerX, y + 74, { align: 'center' });
+  doc.setFontSize(10.5);
+  doc.text('Tel: ' + phone, centerX, y + 65, { align: 'center' });
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text(doc.splitTextToSize(address, width - 12).slice(0, 1), centerX, y + 84, { align: 'center' });
+  doc.setFontSize(8.5);
+  doc.text(doc.splitTextToSize(address, width - 12).slice(0, 1), centerX, y + 74, { align: 'center' });
   doc.setTextColor(0, 0, 0);
   doc.setLineWidth(0.2);
 }

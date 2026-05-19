@@ -29,6 +29,7 @@ export function usePbCollection<T>(collectionName: string) {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<any>(null);
+  const [authRevision, setAuthRevision] = useState(0);
 
   const updateRecords = useCallback((newRecords: T[]) => {
     setRecords(newRecords);
@@ -90,6 +91,13 @@ export function usePbCollection<T>(collectionName: string) {
       return next;
     });
   }, [collectionName]);
+
+  useEffect(() => {
+    const unsubscribeAuth = pb.authStore.onChange(() => {
+      setAuthRevision(revision => revision + 1);
+    });
+    return () => unsubscribeAuth();
+  }, []);
 
   useEffect(() => {
     if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase' || !pb.authStore.isValid) {
@@ -161,7 +169,7 @@ export function usePbCollection<T>(collectionName: string) {
       isMounted = false;
       pb.collection(collectionName).unsubscribe('*');
     };
-  }, [collectionName, updateRecords]);
+  }, [collectionName, updateRecords, authRevision]);
 
   useEffect(() => {
     if (import.meta.env.VITE_AUTH_MODE !== 'pocketbase') return;

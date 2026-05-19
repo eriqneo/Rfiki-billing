@@ -27,6 +27,88 @@ function normalizePocketBaseRecord(record: any) {
   };
 }
 
+function normalizeKeyPart(value: unknown) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeAmount(value: unknown) {
+  return Number(value || 0).toFixed(2);
+}
+
+function getStableCollectionKey(collectionName: string, record: any) {
+  if (!record) return '';
+
+  if (collectionName === 'pocket_host_instances') {
+    const hostName = normalizeKeyPart(record.instance_name || record.name);
+    return hostName ? `host:${hostName}` : '';
+  }
+
+  if (collectionName === 'payments') {
+    const idempotencyKey = normalizeKeyPart(record.idempotency_key);
+    if (idempotencyKey) return `payment:idempotency:${idempotencyKey}`;
+
+    const transactionId = normalizeKeyPart(record.transaction_id);
+    if (transactionId) return `payment:transaction:${transactionId}`;
+
+    const clientId = normalizeKeyPart(record.client_id);
+    const date = normalizeKeyPart(record.date);
+    const amount = normalizeAmount(record.amount);
+    const quoteNumber = normalizeKeyPart(record.quote_number);
+    const milestone = normalizeKeyPart(record.billing_milestone_title);
+    if (clientId && date && amount) {
+      return `payment:fallback:${clientId}:${date}:${amount}:${quoteNumber}:${milestone}`;
+    }
+  }
+
+  if (collectionName === 'clients' && record.node_id) return `client:${normalizeKeyPart(record.node_id)}`;
+  if (collectionName === 'quotations' && record.quote_number) return `quote:${normalizeKeyPart(record.quote_number)}`;
+  if (collectionName === 'invoices' && record.invoice_number) return `invoice:${normalizeKeyPart(record.invoice_number)}`;
+  if (collectionName === 'billing_promises') {
+    const clientId = normalizeKeyPart(record.client_id);
+    const quoteNumber = normalizeKeyPart(record.quote_number);
+    const milestone = normalizeKeyPart(record.milestone_title);
+    const dueDate = normalizeKeyPart(record.due_date);
+    const amount = normalizeAmount(record.amount_due);
+    if (clientId && quoteNumber && milestone) {
+      return `promise:${clientId}:${quoteNumber}:${milestone}:${dueDate}:${amount}`;
+    }
+  }
+
+  return '';
+}
+
+function recordFreshness(record: any) {
+  const updated = Date.parse(record?.updated || record?.created_at || record?.date || '');
+  return Number.isFinite(updated) ? updated : 0;
+}
+
+function choosePreferredRecord(current: any, incoming: any) {
+  if (!current) return incoming;
+  if (incoming?.synced === false && current?.synced !== false) return incoming;
+  if (current?.synced === false && incoming?.synced !== false) return current;
+  if (recordFreshness(incoming) > recordFreshness(current)) return incoming;
+  return current;
+}
+
+function dedupeBusinessRecords<T>(collectionName: string, records: T[] | undefined) {
+  if (!records) return records;
+
+  const byStableKey = new Map<string, any>();
+  const fallbackRecords: any[] = [];
+
+  for (const record of records as any[]) {
+    const stableKey = getStableCollectionKey(collectionName, record);
+    if (!stableKey) {
+      fallbackRecords.push(record);
+      continue;
+    }
+
+    byStableKey.set(stableKey, choosePreferredRecord(byStableKey.get(stableKey), record));
+  }
+
+  return [...fallbackRecords, ...Array.from(byStableKey.values())] as T[];
+}
+
 async function findExistingLocalRecord(table: any, collectionName: string, record: any) {
   const byPbId = await table.where('pb_id').equals(record.id).first();
   if (byPbId) return byPbId;
@@ -45,6 +127,9 @@ async function findExistingLocalRecord(table: any, collectionName: string, recor
   }
   if (collectionName === 'payments' && record.idempotency_key) {
     return table.where('idempotency_key').equals(record.idempotency_key).first();
+  }
+  if (collectionName === 'payments' && record.transaction_id) {
+    return table.where('transaction_id').equals(record.transaction_id).first();
   }
 
   return null;
@@ -89,9 +174,9 @@ export function useUnifiedCollection<T>(collectionName: string, dexieFetcher: ()
   }, [collectionName, isPb, pbRecords]);
   
   const mergedData = useMemo(() => {
-    if (!isPb) return dexieRecords;
-    if (!pbRecords) return dexieRecords;
-    if (!dexieRecords) return pbRecords;
+    if (!isPb) return dedupeBusinessRecords(collectionName, dexieRecords);
+    if (!pbRecords) return dedupeBusinessRecords(collectionName, dexieRecords);
+    if (!dexieRecords) return dedupeBusinessRecords(collectionName, pbRecords);
 
     // 1. Create a map of PB records for fast lookup
     const dataMap = new Map();
@@ -113,7 +198,7 @@ export function useUnifiedCollection<T>(collectionName: string, dexieFetcher: ()
       }
     });
     
-    return Array.from(dataMap.values());
+    return dedupeBusinessRecords(collectionName, Array.from(dataMap.values()));
   }, [isPb, pbRecords, dexieRecords]);
 
   return {

@@ -292,10 +292,24 @@ export function Settings() {
     setIsProvisioning(true);
 
     const count = parseInt(stockCount);
+    const existingNames = new Set(
+      (instances || [])
+        .map((instance: any) => String(instance.instance_name || instance.name || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const normalizedPrefix = stockPrefix.trim().toLowerCase();
+    const nextAvailableName = () => {
+      let index = 1;
+      while (existingNames.has(`${normalizedPrefix}${index}`)) index++;
+      const name = `${stockPrefix}${index}`;
+      existingNames.add(name.toLowerCase());
+      return name;
+    };
+
     for (let i = 1; i <= count; i++) {
-      const idx = (instances?.length || 0) + i;
+      const instanceName = nextAvailableName();
       await addEntity('pocket_host_instances', {
-        instance_name: `${stockPrefix}${idx}`,
+        instance_name: instanceName,
         monthly_fee: 1500,
         billing_cycle: 'monthly',
         status: 'active',

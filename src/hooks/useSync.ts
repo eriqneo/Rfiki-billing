@@ -87,6 +87,27 @@ function normalizeHostName(record: any) {
   return String(record?.instance_name || record?.name || '').trim().toLowerCase();
 }
 
+function dayKey(value: unknown) {
+  const raw = String(value || '');
+  return raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+}
+
+function hasPaymentContext(record: any) {
+  return Boolean(record?.quote_number || record?.billing_milestone_title || record?.billing_promise_id);
+}
+
+function findCoveringRemotePayment(localData: any, remoteRecords: any[]) {
+  if (!localData || hasPaymentContext(localData)) return null;
+
+  return remoteRecords.find((record) =>
+    record.status === localData.status &&
+    record.client_id === localData.client_id &&
+    dayKey(record.date) === dayKey(localData.date) &&
+    Number(record.amount) === Number(localData.amount) &&
+    hasPaymentContext(record)
+  ) || null;
+}
+
 function findStableRemoteMatch(localData: any, remoteRecords: any[]) {
   return remoteRecords.find((record) => {
     if (localData.node_id && record.node_id === localData.node_id) return true;
@@ -179,8 +200,11 @@ export function useSync() {
             }
           }
 
-          const recordsNeedingSync = allRecords.filter((record: any) =>
-            record.id && (
+          const recordsNeedingSync = allRecords.filter((record: any) => {
+            if (!record.id) return false;
+            if (remoteRecords && col === 'payments' && findCoveringRemotePayment(record, remoteRecords)) return false;
+
+            return (
               !record.pb_id ||
               record.synced === false ||
               (
@@ -188,8 +212,8 @@ export function useSync() {
                 !remoteRecords.some((remote) => remote.id === record.pb_id) &&
                 !findStableRemoteMatch(record, remoteRecords)
               )
-            )
-          );
+            );
+          });
 
           for (const record of recordsNeedingSync) {
             const key = `${col}:${record.id}`;
@@ -306,7 +330,18 @@ export function useSync() {
                 const pbId = (localData as any).pb_id;
 
                 try {
-                  if (item.operation === 'DELETE') {
+                  if (item.entity === 'payments') {
+                    const remoteRecords = await getRemoteRecords(collectionName);
+                    const coveringPayment = findCoveringRemotePayment(localData, remoteRecords);
+                    if (coveringPayment) {
+                      await db.payments.update(item.entityId, { pb_id: coveringPayment.id, synced: true });
+                      syncedSuccessfully = true;
+                    }
+                  }
+
+                  if (syncedSuccessfully) {
+                    // The local payment is already represented by a richer cloud record.
+                  } else if (item.operation === 'DELETE') {
                     if (pbId) await pb.collection(collectionName).delete(pbId);
                   } else if (pbId) {
                     try {
