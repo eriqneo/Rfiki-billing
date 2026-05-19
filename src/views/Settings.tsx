@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type TeamMember, type BusinessProfile } from '../db/db';
+import { db, type TeamMember, type BusinessProfile, type Budget } from '../db/db';
 import { pb } from '../lib/pocketbase';
 import {
   Users,
@@ -29,7 +29,9 @@ import {
   ShieldAlert,
   Image as ImageIcon,
   Upload,
-  X
+  X,
+  Tags,
+  WalletCards
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { cn } from '../lib/utils';
@@ -40,6 +42,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { addMonths } from 'date-fns';
 import { usePbCollection } from '../hooks/usePbCollection';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
+import { DEFAULT_MONTHLY_BUDGETS, DEFAULT_VOTEHEADS, normalizeVoteheadName } from '../services/voteheadService';
 
 export function Settings() {
   const { theme, setTheme } = useTheme();
@@ -47,6 +50,8 @@ export function Settings() {
   const { showToast } = useToast();
   const teamMembers = useLiveQuery(() => db.team_members.toArray());
   const business = useLiveQuery(() => db.business.limit(1).toArray());
+  const voteheadBudgets = useLiveQuery(() => db.budgets.orderBy('votehead').toArray());
+  const expenses = useLiveQuery(() => db.expenses.toArray());
   const { data: instances } = useUnifiedCollection<any>('pocket_host_instances', () => db.pocket_host_instances.toArray());
   const { currentUser, updateProfile } = useAuth();
 
@@ -92,6 +97,76 @@ export function Settings() {
   const [bizLogo, setBizLogo] = useState('');
   const [isSavingBiz, setIsSavingBiz] = useState(false);
   const [showBizToast, setShowBizToast] = useState(false);
+
+  // Votehead State
+  const [voteheadName, setVoteheadName] = useState('');
+  const [voteheadLimit, setVoteheadLimit] = useState('');
+  const [editingVoteheadId, setEditingVoteheadId] = useState<number | null>(null);
+  const [isSavingVotehead, setIsSavingVotehead] = useState(false);
+  const expenseStatsByVotehead = useMemo(() => {
+    const stats = new Map<string, { count: number; total: number }>();
+    (expenses || []).forEach(expense => {
+      const key = String(expense.category || '').toLowerCase();
+      const current = stats.get(key) || { count: 0, total: 0 };
+      stats.set(key, {
+        count: current.count + 1,
+        total: current.total + (Number(expense.amount) || 0),
+      });
+    });
+    return stats;
+  }, [expenses]);
+
+  useEffect(() => {
+    const seedVoteheads = async () => {
+      if (voteheadBudgets === undefined || voteheadBudgets.length > 0) return;
+      if (localStorage.getItem('rafiki_voteheads_seeded_v1')) return;
+
+      await db.transaction('rw', db.budgets, async () => {
+        for (const votehead of DEFAULT_VOTEHEADS) {
+          await db.budgets.add({
+            votehead,
+            monthly_limit: DEFAULT_MONTHLY_BUDGETS[votehead] || 0,
+            synced: false,
+          });
+        }
+      });
+      localStorage.setItem('rafiki_voteheads_seeded_v1', 'true');
+    };
+
+    seedVoteheads().catch(error => {
+      console.error('Failed to seed voteheads:', error);
+    });
+  }, [voteheadBudgets]);
+
+  useEffect(() => {
+    const reconcileCapturedVoteheads = async () => {
+      if (voteheadBudgets === undefined || expenses === undefined || expenses.length === 0) return;
+
+      const existing = new Set((voteheadBudgets || []).map(item => item.votehead.toLowerCase()));
+      const captured = Array.from(new Set(
+        expenses
+          .map(expense => normalizeVoteheadName(expense.category || ''))
+          .filter(Boolean)
+      ));
+      const missing = captured.filter(votehead => !existing.has(votehead.toLowerCase()));
+
+      if (missing.length === 0) return;
+
+      await db.transaction('rw', db.budgets, async () => {
+        for (const votehead of missing) {
+          await db.budgets.add({
+            votehead,
+            monthly_limit: DEFAULT_MONTHLY_BUDGETS[votehead] || 0,
+            synced: false,
+          });
+        }
+      });
+    };
+
+    reconcileCapturedVoteheads().catch(error => {
+      console.error('Failed to reconcile captured voteheads:', error);
+    });
+  }, [expenses, voteheadBudgets]);
 
   // Mobile Expand State
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -432,6 +507,75 @@ export function Settings() {
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const resetVoteheadForm = () => {
+    setVoteheadName('');
+    setVoteheadLimit('');
+    setEditingVoteheadId(null);
+  };
+
+  const handleEditVotehead = (budget: Budget) => {
+    setVoteheadName(budget.votehead);
+    setVoteheadLimit(String(budget.monthly_limit || ''));
+    setEditingVoteheadId(budget.id || null);
+  };
+
+  const handleSaveVotehead = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const cleanName = normalizeVoteheadName(voteheadName);
+    const cleanLimit = Math.max(Number(voteheadLimit) || 0, 0);
+
+    if (!cleanName) {
+      showToast('Enter a votehead name', 'error');
+      return;
+    }
+
+    const duplicate = (voteheadBudgets || []).find(item =>
+      item.votehead.toLowerCase() === cleanName.toLowerCase() &&
+      item.id !== editingVoteheadId
+    );
+    if (duplicate) {
+      showToast('That votehead already exists', 'error');
+      return;
+    }
+
+    setIsSavingVotehead(true);
+    try {
+      if (editingVoteheadId) {
+        await db.budgets.update(editingVoteheadId, {
+          votehead: cleanName,
+          monthly_limit: cleanLimit,
+          synced: false,
+        });
+        showToast('Votehead updated', 'success');
+      } else {
+        await db.budgets.add({
+          votehead: cleanName,
+          monthly_limit: cleanLimit,
+          synced: false,
+        });
+        showToast('Votehead added', 'success');
+      }
+      resetVoteheadForm();
+    } catch (error: any) {
+      showToast(error?.message || 'Failed to save votehead', 'error');
+    } finally {
+      setIsSavingVotehead(false);
+    }
+  };
+
+  const handleDeleteVotehead = async (budget: Budget) => {
+    if (!budget.id) return;
+    const usageCount = expenseStatsByVotehead.get(budget.votehead.toLowerCase())?.count || 0;
+    if (usageCount > 0) {
+      showToast(`Cannot delete ${budget.votehead}; it is used by ${usageCount} expense record${usageCount === 1 ? '' : 's'}.`, 'error');
+      return;
+    }
+
+    await db.budgets.delete(budget.id);
+    if (editingVoteheadId === budget.id) resetVoteheadForm();
+    showToast('Votehead removed', 'success');
   };
 
   const handleClearCache = async () => {
@@ -992,6 +1136,141 @@ export function Settings() {
               </motion.div>
             )}
           </AnimatePresence>
+        </div>
+
+        {/* Expense Voteheads */}
+        <div className="md:col-span-2 glass-panel p-8 rounded-3xl space-y-8 border-accent-green/10">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-accent-green/10 border border-accent-green/20 flex items-center justify-center shrink-0">
+                <Tags className="w-5 h-5 text-accent-green" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black text-text-main uppercase tracking-widest">Expense Voteheads</h3>
+                <p className="mt-2 max-w-2xl text-[10px] font-bold uppercase tracking-[0.14em] leading-relaxed text-text-dim">
+                  Manage the categories used when recording expenses. These voteheads power Expense filters, spending cards, and Reports.
+                </p>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-3">
+              <p className="text-[8px] font-black uppercase tracking-[0.2em] text-text-dim">Configured</p>
+              <p className="mt-1 text-2xl font-black text-accent-green">{voteheadBudgets?.length || 0}</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveVotehead} className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_180px_auto]">
+            <label className="space-y-2">
+              <span className="text-[9px] font-black uppercase tracking-widest text-text-dim">Votehead Name</span>
+              <input
+                value={voteheadName}
+                onChange={event => setVoteheadName(event.target.value)}
+                placeholder="e.g. Software Licenses"
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-sm font-black uppercase tracking-widest text-text-main outline-none transition-all placeholder:text-text-dim/25 focus:border-accent-green/50"
+              />
+            </label>
+            <label className="space-y-2">
+              <span className="text-[9px] font-black uppercase tracking-widest text-text-dim">Monthly Limit</span>
+              <input
+                type="number"
+                value={voteheadLimit}
+                onChange={event => setVoteheadLimit(event.target.value)}
+                placeholder="0"
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-sm font-black text-text-main outline-none transition-all placeholder:text-text-dim/25 focus:border-accent-green/50"
+              />
+            </label>
+            <div className="flex items-end gap-3">
+              {editingVoteheadId && (
+                <button
+                  type="button"
+                  onClick={resetVoteheadForm}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-[10px] font-black uppercase tracking-widest text-text-dim transition-all hover:text-text-main"
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={isSavingVotehead}
+                className="flex items-center justify-center gap-2 rounded-2xl bg-accent-green px-6 py-4 text-[10px] font-black uppercase tracking-widest text-bg-deep shadow-neon transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isSavingVotehead ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                {editingVoteheadId ? 'Update' : 'Add'}
+              </button>
+            </div>
+          </form>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {(voteheadBudgets || []).map((budget) => {
+              const expenseStats = expenseStatsByVotehead.get(budget.votehead.toLowerCase()) || { count: 0, total: 0 };
+              const usageCount = expenseStats.count;
+              const recordedSpend = expenseStats.total;
+              const monthlyLimit = Number(budget.monthly_limit) || 0;
+              return (
+                <div key={budget.id || budget.votehead} className="rounded-2xl border border-white/10 bg-white/[0.025] p-5 transition-all hover:border-accent-green/25">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-accent-green/20 bg-accent-green/10">
+                        <WalletCards className="h-4 w-4 text-accent-green" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black uppercase tracking-tight text-text-main">{budget.votehead}</p>
+                        <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-text-dim">
+                          {usageCount} expense record{usageCount === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-[8px] font-black uppercase tracking-[0.18em] text-text-dim">Recorded Spend</p>
+                      <p className="mt-1 text-sm font-black text-accent-green">
+                        KSh {recordedSpend.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-5 rounded-2xl border border-white/10 bg-bg-deep/25 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-[8px] font-black uppercase tracking-[0.18em] text-text-dim">Monthly Limit</span>
+                      <span className="text-xs font-black text-text-main">KSh {monthlyLimit.toLocaleString()}</span>
+                    </div>
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/5">
+                      <div
+                        className={cn(
+                          'h-full rounded-full',
+                          monthlyLimit > 0 && recordedSpend > monthlyLimit ? 'bg-red-500' : 'bg-accent-green'
+                        )}
+                        style={{ width: `${monthlyLimit > 0 ? Math.min(100, (recordedSpend / monthlyLimit) * 100) : 0}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-5 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleEditVotehead(budget)}
+                      className="rounded-xl border border-white/10 bg-white/[0.03] p-2 text-text-dim transition-all hover:border-accent-green/30 hover:text-accent-green"
+                      title="Edit votehead"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteVotehead(budget)}
+                      className="rounded-xl border border-red-500/20 bg-red-500/5 p-2 text-red-400 transition-all hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      title={usageCount > 0 ? 'Votehead is in use' : 'Delete votehead'}
+                      disabled={usageCount > 0}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+
+            {voteheadBudgets?.length === 0 && (
+              <div className="md:col-span-2 rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-8 text-center">
+                <Tags className="mx-auto h-8 w-8 text-accent-green/60" />
+                <p className="mt-4 text-[10px] font-black uppercase tracking-widest text-text-dim">No voteheads configured yet</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Theme Settings */}

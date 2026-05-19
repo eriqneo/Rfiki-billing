@@ -10,6 +10,7 @@ import { NexusTable } from '../components/NexusTable';
 import { format, subMonths, startOfMonth, endOfMonth, isWithinInterval, parseISO, startOfDay, endOfDay, addDays, isBefore } from 'date-fns';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
 import { type Expense, type Payment, type PaymentPromise, type Client, type PocketHostInstance } from '../db/db';
+import { getVoteheadsFromBudgetsAndExpenses } from '../services/voteheadService';
 
 interface MonthlyReport {
   id: string;
@@ -20,7 +21,19 @@ interface MonthlyReport {
   margin: string;
 }
 
-const VOTEHEADS = ['Utility', 'Rent', 'Salary', 'Tithe', 'Operations', 'Marketing'];
+function safeMoneyValue(value: unknown) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function isDueWithinNext30Days(value?: string) {
+  if (!value) return false;
+  const dueDate = parseISO(value);
+  if (Number.isNaN(dueDate.getTime())) return false;
+  const now = new Date();
+  const next30Days = addDays(now, 30);
+  return !isBefore(dueDate, startOfDay(now)) && isBefore(dueDate, next30Days);
+}
 
 export function Reports() {
   const [dateStart, setDateStart] = useState('');
@@ -34,6 +47,8 @@ export function Reports() {
   const { data: promises } = useUnifiedCollection<PaymentPromise>('billing_promises', () => db.billing_promises.where('status').equals('pending').toArray());
   const { data: clients } = useUnifiedCollection<Client>('clients', () => db.clients.toArray());
   const { data: instances } = useUnifiedCollection<PocketHostInstance>('pocket_host_instances', () => db.pocket_host_instances.toArray());
+  const budgets = useLiveQuery(() => db.budgets.toArray());
+  const voteheads = useMemo(() => getVoteheadsFromBudgetsAndExpenses(budgets, expenses), [budgets, expenses]);
 
   const filteredData = useMemo(() => {
     if (!expenses || !payments) return { expenses: [], payments: [] };
@@ -73,11 +88,11 @@ export function Reports() {
 
       const monthlyRevenue = filteredData.payments
         .filter(p => isWithinInterval(parseISO(p.date), interval))
-        .reduce((sum, p) => sum + p.amount, 0);
+        .reduce((sum, p) => sum + safeMoneyValue(p.amount), 0);
 
       const monthlyExpenses = filteredData.expenses
         .filter(e => isWithinInterval(parseISO(e.date), interval))
-        .reduce((sum, e) => sum + e.amount, 0);
+        .reduce((sum, e) => sum + safeMoneyValue(e.amount), 0);
 
       const profit = monthlyRevenue - monthlyExpenses;
       const margin = monthlyRevenue > 0 ? ((profit / monthlyRevenue) * 100).toFixed(1) : '0.0';
@@ -95,22 +110,21 @@ export function Reports() {
     return data;
   }, [filteredData]);
 
-  const totalRevenue = useMemo(() => filteredData.payments.reduce((sum, p) => sum + p.amount, 0), [filteredData]);
-  const totalExpenses = useMemo(() => filteredData.expenses.reduce((sum, e) => sum + e.amount, 0), [filteredData]);
+  const totalRevenue = useMemo(() => filteredData.payments.reduce((sum, p) => sum + safeMoneyValue(p.amount), 0), [filteredData]);
+  const totalExpenses = useMemo(() => filteredData.expenses.reduce((sum, e) => sum + safeMoneyValue(e.amount), 0), [filteredData]);
   const netSurplus = totalRevenue - totalExpenses;
 
   const forecastMetrics = useMemo(() => {
     if (!promises || !payments || !instances) return { projected: 0, actual: 0, efficiency: 0 };
     
-    const next30Days = addDays(new Date(), 30);
     const projectedRevenue = promises
-      .filter(p => isBefore(parseISO(p.due_date), next30Days))
-      .reduce((sum, p) => sum + p.amount_due, 0);
+      .filter(p => isDueWithinNext30Days(p.due_date))
+      .reduce((sum, p) => sum + safeMoneyValue(p.amount_due), 0);
 
     const hostRevenue = instances
       .filter(i => i.status === 'active' && i.client_id)
       .reduce((sum, i) => {
-        const fee = i.monthly_fee;
+        const fee = safeMoneyValue(i.monthly_fee);
         const cycle = i.billing_cycle || 'monthly';
         if (cycle === 'monthly') return sum + fee;
         if (cycle === 'quarterly') return sum + (fee / 3);
@@ -119,8 +133,10 @@ export function Reports() {
         return sum + fee;
       }, 0);
     
-    const totalPromised = promises.reduce((sum, p) => sum + p.amount_due, 0) + payments.reduce((sum, p) => sum + p.amount, 0) + hostRevenue;
-    const collectionEfficiency = totalPromised > 0 ? (totalRevenue / totalPromised) * 100 : 0;
+    const totalPromised = promises.reduce((sum, p) => sum + safeMoneyValue(p.amount_due), 0) +
+      payments.reduce((sum, p) => sum + safeMoneyValue(p.amount), 0) +
+      hostRevenue;
+    const collectionEfficiency = totalPromised > 0 ? Math.min(100, (totalRevenue / totalPromised) * 100) : 0;
 
     return {
       projected: projectedRevenue + hostRevenue,
@@ -135,11 +151,11 @@ export function Reports() {
     return clients.map(client => {
       const clientRevenue = payments
         .filter(p => p.client_id === client.node_id)
-        .reduce((sum, p) => sum + p.amount, 0);
+        .reduce((sum, p) => sum + safeMoneyValue(p.amount), 0);
       
       const clientExpenses = expenses
         .filter(e => e.client_id === client.node_id)
-        .reduce((sum, e) => sum + e.amount, 0);
+        .reduce((sum, e) => sum + safeMoneyValue(e.amount), 0);
       
       const netProfit = clientRevenue - clientExpenses;
       const margin = clientRevenue > 0 ? (netProfit / clientRevenue) * 100 : 0;
@@ -155,16 +171,16 @@ export function Reports() {
   }, [clients, expenses, payments]);
 
   const headers = [
-    { label: 'Fiscal Period', className: 'px-8 text-left' },
+    { label: 'Reporting Period', className: 'px-8 text-left' },
     { label: 'Gross Revenue', className: 'px-8 text-right' },
     { label: 'Operating Cost', className: 'px-8 text-right' },
-    { label: 'Net Yield', className: 'px-8 text-right' },
-    { label: 'Efficiency', className: 'px-8 text-center' },
+    { label: 'Net Profit', className: 'px-8 text-right' },
+    { label: 'Margin', className: 'px-8 text-center' },
   ];
 
   const handleExportCSV = () => {
     const csvRows = [];
-    csvRows.push(['Fiscal Period', 'Gross Revenue (KSh)', 'Operating Cost (KSh)', 'Net Yield (KSh)', 'Efficiency']);
+    csvRows.push(['Reporting Period', 'Gross Revenue (KSh)', 'Operating Cost (KSh)', 'Net Profit (KSh)', 'Margin']);
     reportsData.forEach(r => {
       csvRows.push([r.month, r.revenue, r.expenses, r.profit, r.margin]);
     });
@@ -197,7 +213,7 @@ export function Reports() {
     doc.setTextColor(100, 100, 100);
     doc.text(`Global Revenue: KSh ${totalRevenue.toLocaleString()}`, 14, 45);
     doc.text(`Operating Expenditure: KSh ${totalExpenses.toLocaleString()}`, 14, 52);
-    doc.text(`Net Surplus Yield: KSh ${netSurplus.toLocaleString()}`, 14, 59);
+    doc.text(`Net Profit: KSh ${netSurplus.toLocaleString()}`, 14, 59);
 
     // Timeline Table
     const tableData = reportsData.map(r => [
@@ -259,7 +275,7 @@ export function Reports() {
                     </div>
                     <div>
                       <p className="text-[10px] font-black text-text-main uppercase tracking-widest group-hover:text-accent-green transition-colors">Excel / CSV</p>
-                      <p className="text-[8px] text-text-dim font-bold uppercase tracking-widest">Raw Data Matrix</p>
+                      <p className="text-[8px] text-text-dim font-bold uppercase tracking-widest">Spreadsheet export</p>
                     </div>
                   </button>
                   <button 
@@ -329,7 +345,7 @@ export function Reports() {
                   className="bg-transparent text-[10px] font-bold text-text-main focus:outline-none uppercase w-full cursor-pointer"
                 >
                   <option value="all" className="bg-bg-deep">ALL VOTEHEADS</option>
-                  {VOTEHEADS.map(v => (
+                  {voteheads.map(v => (
                     <option key={v} value={v} className="bg-bg-deep">{v}</option>
                   ))}
                 </select>
@@ -345,7 +361,7 @@ export function Reports() {
             }}
             className="text-[9px] font-black text-text-dim uppercase tracking-widest hover:text-accent-green transition-colors"
           >
-            Clear Matrix
+            Clear Filters
           </button>
         </div>
       </section>
@@ -361,12 +377,12 @@ export function Reports() {
            <p className="text-4xl font-black text-accent-green tabular-nums tracking-tighter drop-shadow-[0_0_15px_rgba(57,255,20,0.4)]">
              KSh {totalRevenue.toLocaleString()}
            </p>
-           <div className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Inflow Aggregation</div>
+           <div className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Total money received</div>
         </div>
 
         <div className="glass-panel p-8 rounded-3xl border-white/5 space-y-4 bg-text-main/[0.01] relative overflow-hidden group scale-105 shadow-2xl z-10">
            <div className="flex flex-col items-center text-center space-y-4">
-              <span className="text-[11px] font-black text-text-dim uppercase tracking-[0.3em]">Net Surplus</span>
+              <span className="text-[11px] font-black text-text-dim uppercase tracking-[0.3em]">Net Profit</span>
               <p className={cn(
                 "text-5xl font-black tabular-nums tracking-tighter transition-all",
                 netSurplus >= 0 
@@ -384,7 +400,7 @@ export function Reports() {
                    "text-[10px] font-black uppercase tracking-widest",
                    netSurplus >= 0 ? "text-accent-green" : "text-red-500"
                  )}>
-                   {netSurplus >= 0 ? 'Surplus Protocol: Active' : 'Deficit Warning: Critical'}
+                   {netSurplus >= 0 ? 'Business is profitable' : 'Costs are higher than revenue'}
                  </span>
               </div>
            </div>
@@ -399,7 +415,7 @@ export function Reports() {
            <p className="text-4xl font-black text-cyber-mustard tabular-nums tracking-tighter drop-shadow-[0_0_15px_rgba(255,215,0,0.4)]">
              KSh {totalExpenses.toLocaleString()}
            </p>
-           <div className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Outflow Aggregation</div>
+           <div className="text-[9px] font-bold text-text-dim uppercase tracking-widest">Total money spent</div>
         </div>
       </section>
       
@@ -408,7 +424,7 @@ export function Reports() {
          <div className="flex items-center justify-between">
             <div className="space-y-1">
                <h2 className="text-xl font-black text-text-main uppercase tracking-tight italic">30-Day Revenue Forecast</h2>
-               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">Predictive Inflow Modelling</p>
+               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">Expected income over the next month</p>
             </div>
             <div className="flex items-center gap-4 px-6 py-3 bg-accent-green/10 rounded-2xl border border-accent-green/20 shadow-neon">
                <div className="flex flex-col">
@@ -450,7 +466,7 @@ export function Reports() {
                      <p className="text-xl font-black text-accent-green tabular-nums italic drop-shadow-neon">KSh {forecastMetrics.projected.toLocaleString()}</p>
                   </div>
                </div>
-               <p className="text-[9px] text-accent-green/70 uppercase font-bold tracking-[0.1em] leading-relaxed">Estimated inflows based on pending payment promises for the next 30 days.</p>
+               <p className="text-[9px] text-accent-green/70 uppercase font-bold tracking-[0.1em] leading-relaxed">Expected income from due client payments and active hosting within the next 30 days.</p>
             </div>
          </div>
       </section>
@@ -460,7 +476,7 @@ export function Reports() {
          <div className="flex items-center justify-between">
             <div className="space-y-1">
                <h2 className="text-xl font-black text-text-main uppercase tracking-tight">Economic Flow Map</h2>
-               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">Visualizing Capital Transition Logic</p>
+               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">How money moves through the business</p>
             </div>
             <div className="flex gap-4">
                <div className="flex items-center gap-2">
@@ -517,23 +533,23 @@ export function Reports() {
                   className="opacity-40"
                />
 
-               {/* Nodes */}
+               {/* Summary boxes */}
                 <g>
-                  {/* Revenue Node */}
+                  {/* Revenue box */}
                   <rect x="50" y="100" width="100" height="100" rx="15" fill="var(--bg-deep)" stroke="#39ff14" strokeWidth="2" />
                   <text x="100" y="145" textAnchor="middle" fill="#39ff14" fontSize="10" fontWeight="900" className="uppercase tracking-widest">Revenue</text>
                   <text x="100" y="165" textAnchor="middle" fill="currentColor" fontSize="12" fontWeight="900" className="tabular-nums">
                     {Math.round(totalRevenue/1000)}K
                   </text>
                   
-                  {/* Expense Node */}
+                  {/* Expense box */}
                   <rect x="650" y="20" width="100" height="60" rx="12" fill="var(--bg-deep)" stroke="#FFD700" strokeWidth="2" />
                   <text x="700" y="45" textAnchor="middle" fill="#FFD700" fontSize="8" fontWeight="900" className="uppercase tracking-widest">Expenses</text>
                   <text x="700" y="60" textAnchor="middle" fill="currentColor" fontSize="11" fontWeight="900" className="tabular-nums">
                     {Math.round(totalExpenses/1000)}K
                   </text>
 
-                  {/* Profit Node */}
+                  {/* Profit box */}
                   <rect x="650" y="220" width="100" height="60" rx="12" fill="var(--bg-deep)" stroke="#39ff14" strokeWidth="2" />
                   <text x="700" y="245" textAnchor="middle" fill="#39ff14" fontSize="8" fontWeight="900" className="uppercase tracking-widest">Profit</text>
                   <text x="700" y="260" textAnchor="middle" fill="currentColor" fontSize="11" fontWeight="900" className="tabular-nums">
@@ -548,7 +564,7 @@ export function Reports() {
          </div>
       </section>
 
-      {/* Unit Economy Intelligence */}
+      {/* Client Profitability */}
       <section className="space-y-6">
          <div className="flex items-center justify-between">
             <div className="space-y-1">
@@ -558,11 +574,11 @@ export function Reports() {
             <div className="flex gap-4">
                <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-accent-green shadow-neon" />
-                  <span className="text-[8px] font-black text-text-dim uppercase tracking-widest">Optimal Node</span>
+                  <span className="text-[8px] font-black text-text-dim uppercase tracking-widest">Healthy margin</span>
                </div>
                <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-cyber-mustard animate-pulse shadow-[0_0_10px_#FFD700]" />
-                  <span className="text-[8px] font-black text-text-dim uppercase tracking-widest">Low Yield Warning</span>
+                  <span className="text-[8px] font-black text-text-dim uppercase tracking-widest">Low margin</span>
                </div>
             </div>
          </div>
@@ -572,8 +588,8 @@ export function Reports() {
             pageSize={6}
             headers={[
                { label: 'Client / System built', className: 'px-8 text-left' },
-               { label: 'Node Revenue', className: 'px-8 text-right' },
-               { label: 'Nodal Expense', className: 'px-8 text-right' },
+               { label: 'Client Revenue', className: 'px-8 text-right' },
+               { label: 'Client Expenses', className: 'px-8 text-right' },
                { label: 'Net Profit', className: 'px-8 text-right' },
                { label: 'ROI Margin', className: 'px-8 text-center' },
             ]}
@@ -629,8 +645,8 @@ export function Reports() {
       <div className="space-y-6">
          <div className="flex items-center justify-between">
             <div className="space-y-1">
-               <h2 className="text-xl font-black text-text-main uppercase tracking-tight">Timeline Aggregations</h2>
-               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">12-Month Rolling Matrix</p>
+               <h2 className="text-xl font-black text-text-main uppercase tracking-tight">Monthly Summary</h2>
+               <p className="text-[10px] font-bold text-text-dim uppercase tracking-[0.2em]">Last 12 months</p>
             </div>
          </div>
          <NexusTable<MonthlyReport>
@@ -640,7 +656,7 @@ export function Reports() {
         emptyState={
           <div className="py-20 text-center">
             <PieChart className="w-12 h-12 text-text-dim mx-auto mb-4 opacity-20" />
-            <p className="text-[10px] font-black text-text-dim uppercase tracking-[0.2em]">Insufficient Data for Intelligence Matrix</p>
+            <p className="text-[10px] font-black text-text-dim uppercase tracking-[0.2em]">Not enough report data yet</p>
           </div>
         }
         renderRow={(report) => (

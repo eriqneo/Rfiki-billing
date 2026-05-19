@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { db, type Expense, type Budget } from '../db/db';
+import { db, type Expense } from '../db/db';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { TrendingUp, Plus, Search, Filter, Download, X, AlertCircle, Calendar, Hash, Zap, ShieldAlert, Fingerprint, Activity, History, Bus, Zap as ZapIcon, Home, Edit2, Trash2, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -9,27 +10,9 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { format, subMonths, startOfMonth, endOfMonth, isWithinInterval, parseISO } from 'date-fns';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
 import { pb } from '../lib/pocketbase';
+import { DEFAULT_VOTEHEADS, getMonthlyBudgetForVotehead, getQuickTagsForVotehead, getVoteheadsFromBudgetsAndExpenses } from '../services/voteheadService';
 
 const HIGH_SPEND_THRESHOLD = 50000;
-const VOTEHEADS = ['Utility', 'Rent', 'Salary', 'Tithe', 'Operations', 'Marketing'];
-
-const QUICK_TAGS: Record<string, string[]> = {
-  Utility: ['Electricity', 'Water', 'Internet', 'Transport'],
-  Rent: ['Office Space', 'Storage', 'Co-working'],
-  Salary: ['Freelance', 'Full-time', 'Bonus'],
-  Tithe: ['Ministry', 'Community', 'Project Support'],
-  Operations: ['Petty Cash', 'Repairs', 'Cleaning'],
-  Marketing: ['Social Ads', 'SEO', 'Print', 'Events']
-};
-
-const MONTHLY_BUDGETS: Record<string, number> = {
-  Utility: 25000,
-  Rent: 55000,
-  Salary: 180000,
-  Tithe: 15000,
-  Operations: 35000,
-  Marketing: 45000
-};
 
 import { NexusTable } from '../components/NexusTable';
 import { useToast } from '../contexts/ToastContext';
@@ -41,6 +24,8 @@ export function Expenses() {
   const { data: expenses } = useUnifiedCollection<Expense>('expenses', () => db.expenses.orderBy('id').reverse().toArray());
   const { data: clients } = useUnifiedCollection<any>('clients', () => db.clients.toArray());
   const { data: payments } = useUnifiedCollection<any>('payments', () => db.payments.toArray());
+  const budgets = useLiveQuery(() => db.budgets.toArray());
+  const voteheads = useMemo(() => getVoteheadsFromBudgetsAndExpenses(budgets, expenses), [budgets, expenses]);
   const { addEntity, updateEntity, deleteEntity, isOnline } = useSync();
   const { showToast } = useToast();
 
@@ -101,7 +86,7 @@ export function Expenses() {
     const now = new Date();
     const interval = { start: startOfMonth(now), end: endOfMonth(now) };
 
-    return VOTEHEADS.map(v => {
+    return voteheads.map(v => {
       const spent = expenses
         .filter(e => e.category === v && isWithinInterval(parseISO(e.date), interval))
         .reduce((sum, e) => sum + Number(e.amount || 0), 0);
@@ -111,7 +96,7 @@ export function Expenses() {
 
       return { name: v, spent, revenueShare, totalSpendShare };
     });
-  }, [expenses, totalMonthlySpend, totalCollectedRevenue]);
+  }, [expenses, totalMonthlySpend, totalCollectedRevenue, voteheads]);
 
   const headers = [
     { label: 'Status', className: 'px-8 text-left' },
@@ -218,7 +203,7 @@ export function Expenses() {
             className="w-full bg-bg-deep border border-white/5 rounded-2xl py-4 px-5 text-[10px] font-black text-text-main focus:outline-none focus:border-accent-green/50 uppercase tracking-widest appearance-none cursor-pointer"
           >
             <option value="ALL">ALL VOTEHEADS</option>
-            {VOTEHEADS.map(v => <option key={v} value={v}>{v}</option>)}
+            {voteheads.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
         </div>
 
@@ -469,6 +454,7 @@ export function Expenses() {
               setEditingExpense(null);
             }}
             editingExpense={editingExpense}
+            voteheads={voteheads}
           />
         )}
       </AnimatePresence>
@@ -616,11 +602,12 @@ function QuickLogBar({ onSave }: { onSave: (exp: Partial<Expense>) => Promise<vo
   );
 }
 
-function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editingExpense?: Expense | null }) {
+function ExpenseModal({ onClose, editingExpense, voteheads }: { onClose: () => void, editingExpense?: Expense | null, voteheads: string[] }) {
   const { theme } = useTheme();
   const { showToast } = useToast();
-  const { addEntity, updateEntity, isOnline } = useSync();
+  const { addEntity, updateEntity } = useSync();
   const { data: clients } = useUnifiedCollection<any>('clients', () => db.clients.toArray());
+  const budgets = useLiveQuery(() => db.budgets.toArray());
   const [formData, setFormData] = useState(editingExpense ? {
     description: editingExpense.description,
     amount: editingExpense.amount.toString(),
@@ -633,7 +620,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
     description: '',
     amount: '',
     tax_amount: '',
-    category: 'Utility',
+    category: voteheads[0] || DEFAULT_VOTEHEADS[0],
     sub_tag: '',
     client_id: '',
     date: new Date().toISOString().split('T')[0]
@@ -641,7 +628,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
 
   const [isSaving, setIsSaving] = useState(false);
 
-  const currentBudget = MONTHLY_BUDGETS[formData.category] || 1;
+  const currentBudget = getMonthlyBudgetForVotehead(formData.category, budgets);
   const currentAmount = parseFloat(formData.amount) || 0;
   const impactPercentage = (currentAmount / currentBudget) * 100;
   const isHighSpend = currentAmount > HIGH_SPEND_THRESHOLD;
@@ -808,7 +795,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
               <div className="space-y-3">
                 <label className="text-[9px] font-black text-text-dim uppercase tracking-widest pl-1">Votehead Segmentation</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {VOTEHEADS.map(v => (
+                  {voteheads.map(v => (
                     <button
                       key={v}
                       type="button"
@@ -836,7 +823,7 @@ function ExpenseModal({ onClose, editingExpense }: { onClose: () => void, editin
                 >
                   <label className="text-[9px] font-black text-text-dim uppercase tracking-widest pl-1">Dynamic Sub-Tags</label>
                   <div className="flex flex-wrap gap-2 mb-4">
-                    {QUICK_TAGS[formData.category].map(tag => (
+                    {getQuickTagsForVotehead(formData.category).map(tag => (
                       <button
                         key={tag}
                         type="button"

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, Plus, ReceiptText, Send, X } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Download, FileText, LayoutGrid, Plus, ReceiptText, Search, Send, Table2, X } from 'lucide-react';
 import jsPDF from 'jspdf';
-import { db, type BusinessProfile, type Client, type Invoice, type PaymentPromise } from '../db/db';
+import { db, type BusinessProfile, type Client, type Invoice, type Payment, type PaymentPromise, type Quotation } from '../db/db';
 import { useUnifiedCollection } from '../hooks/useUnifiedCollection';
 import { useSync } from '../hooks/useSync';
 import { useToast } from '../contexts/ToastContext';
@@ -25,43 +25,154 @@ function addDays(days: number) {
   return date.toISOString().split('T')[0];
 }
 
+function inferMilestonePercent(title?: string) {
+  const normalized = String(title || '').toLowerCase();
+  if (/(kickoff|deposit|start|initial)/.test(normalized)) return 40;
+  if (/(build|progress|development|implementation)/.test(normalized)) return 40;
+  if (/(deployment|handover|final|completion|launch)/.test(normalized)) return 20;
+  return 100;
+}
+
+function findQuoteForPromise(promise: PaymentPromise | null | undefined, quotations: Quotation[] = []) {
+  if (!promise) return null;
+  return quotations.find(quote =>
+    (promise.quote_number && quote.quote_number === promise.quote_number) ||
+    (promise.quote_id && String(quote.id || quote.pb_id || quote.quote_number) === String(promise.quote_id))
+  ) || null;
+}
+
+function resolveMilestoneAmount(promise?: PaymentPromise | null, quotations: Quotation[] = [], clients: Client[] = []) {
+  if (!promise) return 0;
+  const raw = [
+    promise.amount_due,
+    (promise as any).amount,
+    (promise as any).total,
+    (promise as any).value,
+  ].find(value => Number(value) > 0);
+
+  const directAmount = Number(raw) || 0;
+  if (directAmount > 0) return directAmount;
+
+  const quote = findQuoteForPromise(promise, quotations);
+  const client = clients.find(item => item.node_id === promise.client_id);
+  const quoteTotal = Number(quote?.total) || Number(client?.agreed_price) || 0;
+  if (quoteTotal <= 0) return 0;
+
+  return Math.round(quoteTotal * (inferMilestonePercent(promise.milestone_title) / 100));
+}
+
+function isInvoiceReadyPromise(promise: PaymentPromise, quotations: Quotation[] = [], clients: Client[] = []) {
+  if (promise.status !== 'pending') return false;
+  if (!promise.client_id || !promise.milestone_title) return false;
+  if (!promise.quote_number && !promise.quote_id) return false;
+
+  const quote = findQuoteForPromise(promise, quotations);
+  if (!quote || quote.status !== 'accepted' || quote.billing_plan_created !== true) return false;
+
+  return resolveMilestoneAmount(promise, quotations, clients) > 0;
+}
+
+function paymentMatchesInvoice(payment: Payment, invoice: Invoice) {
+  if (payment.status !== 'completed') return false;
+
+  const paymentPromiseId = String(payment.billing_promise_id || '');
+  const invoicePromiseId = String(invoice.billing_promise_id || '');
+  if (paymentPromiseId && invoicePromiseId && paymentPromiseId === invoicePromiseId) return true;
+
+  return payment.client_id === invoice.client_id &&
+    (payment.quote_number || '') === (invoice.quote_number || '') &&
+    (payment.billing_milestone_title || '') === (invoice.milestone_title || '');
+}
+
+function getInvoicePaymentSummary(invoice: Invoice, payments: Payment[] = []) {
+  const invoicePayments = payments.filter(payment => paymentMatchesInvoice(payment, invoice));
+  const paidToDate = invoicePayments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+  const invoiceTotal = Number(invoice.total) || 0;
+
+  return {
+    invoiceTotal,
+    paidToDate,
+    balance: Math.max(0, invoiceTotal - paidToDate),
+  };
+}
+
+function getClientAccountSummary(invoice: Invoice, payments: Payment[] = [], clients: Client[] = []) {
+  const client = clients.find(item => item.node_id === invoice.client_id);
+  const paidToDate = payments
+    .filter(payment => payment.client_id === invoice.client_id && payment.status === 'completed')
+    .reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+  const agreedPrice = Number(client?.agreed_price) || 0;
+
+  return {
+    agreedPrice,
+    paidToDate,
+    balance: agreedPrice > 0 ? Math.max(0, agreedPrice - paidToDate) : 0,
+  };
+}
+
+function getInvoiceDueSummary(invoice: Invoice, payments: Payment[] = [], clients: Client[] = []) {
+  const account = getClientAccountSummary(invoice, payments, clients);
+  const invoicePayments = getInvoicePaymentSummary(invoice, payments);
+  const projectSubtotal = account.agreedPrice > 0 ? account.agreedPrice : Number(invoice.subtotal) || Number(invoice.total) || 0;
+  const paid = account.agreedPrice > 0 ? account.paidToDate : invoicePayments.paidToDate;
+  const accountBalance = account.agreedPrice > 0
+    ? account.balance
+    : Math.max(0, (Number(invoice.subtotal) || Number(invoice.total) || 0) - paid);
+  const taxRate = Number(invoice.tax_rate) || 0;
+  const taxAmount = accountBalance * (taxRate / 100);
+
+  return {
+    projectSubtotal,
+    paid,
+    accountBalance,
+    taxAmount,
+    totalDue: accountBalance + taxAmount,
+  };
+}
+
 export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
   const { data: invoices } = useUnifiedCollection<Invoice>('invoices', () => db.invoices.orderBy('id').reverse().toArray());
   const { data: promises } = useUnifiedCollection<PaymentPromise>('billing_promises', () => db.billing_promises.toArray());
+  const { data: quotations } = useUnifiedCollection<Quotation>('quotations', () => db.quotations.toArray());
+  const { data: payments } = useUnifiedCollection<Payment>('payments', () => db.payments.toArray());
   const { data: clients } = useUnifiedCollection<Client>('clients', () => db.clients.toArray());
   const { data: business } = useUnifiedCollection<BusinessProfile>('business', () => db.business.toArray());
   const { addEntity, updateEntity, isOnline } = useSync();
   const { showToast } = useToast();
   const [statusFilter, setStatusFilter] = useState<'all' | Invoice['status']>('all');
+  const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   const filteredInvoices = useMemo(() => {
     return (invoices || [])
-      .filter(invoice => statusFilter === 'all' || invoice.status === statusFilter)
+      .filter(invoice => {
+        const haystack = `${invoice.invoice_number} ${invoice.client_name} ${invoice.client_id} ${invoice.quote_number || ''} ${invoice.milestone_title || ''}`.toLowerCase();
+        const matchesSearch = haystack.includes(search.toLowerCase());
+        const matchesStatus = statusFilter === 'all' || invoice.status === statusFilter;
+        return matchesSearch && matchesStatus;
+      })
       .sort((a, b) => String(b.issue_date || '').localeCompare(String(a.issue_date || '')));
-  }, [invoices, statusFilter]);
+  }, [invoices, search, statusFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [statusFilter]);
+  }, [search, statusFilter, viewMode]);
 
-  const getPageRange = (page: number) => {
-    if (page === 1) return { start: 0, end: 5 };
-    const start = 5 + (page - 2) * 10;
-    return { start, end: start + 10 };
-  };
-  const { start, end } = getPageRange(currentPage);
+  const pageSize = viewMode === 'table' ? 10 : 6;
+  const start = (currentPage - 1) * pageSize;
+  const end = start + pageSize;
   const paginatedInvoices = filteredInvoices.slice(start, end);
-  const totalPages = filteredInvoices.length <= 5 ? 1 : 1 + Math.ceil((filteredInvoices.length - 5) / 10);
+  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
 
   const existingPromiseIds = new Set((invoices || []).map(invoice => invoice.billing_promise_id).filter(Boolean));
   const existingPromiseKeys = new Set((invoices || []).map(invoice => `${invoice.client_id}:${invoice.quote_number || ''}:${invoice.milestone_title || ''}`));
   const billablePromises = (promises || [])
     .filter(promise => {
       const promiseKey = `${promise.client_id}:${promise.quote_number || ''}:${promise.milestone_title || ''}`;
-      return promise.status !== 'fulfilled' &&
+      return isInvoiceReadyPromise(promise, quotations || [], clients || []) &&
         !existingPromiseIds.has(String(promise.id || promise.pb_id || '')) &&
         !existingPromiseKeys.has(promiseKey);
     })
@@ -71,7 +182,9 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
     draft: (invoices || []).filter(invoice => invoice.status === 'draft').length,
     sent: (invoices || []).filter(invoice => invoice.status === 'sent').length,
     paid: (invoices || []).filter(invoice => invoice.status === 'paid').length,
-    receivable: (invoices || []).filter(invoice => invoice.status !== 'paid' && invoice.status !== 'void').reduce((sum, invoice) => sum + (Number(invoice.total) || 0), 0),
+    receivable: (invoices || [])
+      .filter(invoice => invoice.status !== 'paid' && invoice.status !== 'void')
+      .reduce((sum, invoice) => sum + getInvoiceDueSummary(invoice, payments || [], clients || []).totalDue, 0),
   };
 
   const updateStatus = async (invoice: Invoice, status: Invoice['status']) => {
@@ -148,35 +261,92 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-white/5 p-1 w-fit">
-        {(['all', 'draft', 'sent', 'paid', 'void'] as const).map(status => (
-          <button key={status} onClick={() => setStatusFilter(status)} className={cn(
-            'rounded-xl px-5 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all',
-            statusFilter === status ? 'bg-accent-green text-bg-deep shadow-neon' : 'text-text-dim hover:text-text-main'
-          )}>
-            {status}
-          </button>
-        ))}
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="relative w-full xl:max-w-md">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-text-dim" />
+          <input
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search invoices, clients, quotes..."
+            className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3 pl-11 pr-4 text-sm font-bold text-text-main outline-none transition-all placeholder:text-text-dim/40 focus:border-accent-green/40"
+          />
+        </div>
+
+        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+          <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-white/5 p-1">
+            {(['all', 'draft', 'sent', 'paid', 'void'] as const).map(status => (
+              <button key={status} onClick={() => setStatusFilter(status)} className={cn(
+                'rounded-xl px-4 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all',
+                statusFilter === status ? 'bg-accent-green text-bg-deep shadow-neon' : 'text-text-dim hover:text-text-main'
+              )}>
+                {status}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-2 gap-1 rounded-2xl border border-white/10 bg-white/5 p-1 md:w-[176px]">
+            {[
+              { id: 'cards' as const, label: 'Cards', icon: LayoutGrid },
+              { id: 'table' as const, label: 'Table', icon: Table2 },
+            ].map(option => {
+              const Icon = option.icon;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setViewMode(option.id)}
+                  className={cn(
+                    'flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-[9px] font-black uppercase tracking-widest transition-all',
+                    viewMode === option.id ? 'bg-accent-green text-bg-deep shadow-neon' : 'text-text-dim hover:text-text-main'
+                  )}
+                  title={`${option.label} view`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
+      {viewMode === 'cards' ? (
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        {paginatedInvoices.map(invoice => (
-          <article key={String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="glass-panel rounded-3xl border-white/10 p-6">
-            <div className="flex items-start justify-between gap-4">
+        {paginatedInvoices.map(invoice => {
+          const dueSummary = getInvoiceDueSummary(invoice, payments || [], clients || []);
+          return (
+          <article key={String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="group overflow-hidden rounded-3xl border border-white/10 bg-white/[0.025] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.16)] transition-all hover:border-accent-green/30 hover:bg-white/[0.04]">
+            <div className="mb-5 flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-accent-green">{invoice.invoice_number}</p>
-                <h2 className="mt-2 truncate text-xl font-black uppercase tracking-tight text-text-main">{invoice.client_name}</h2>
-                <p className="mt-1 text-xs font-bold uppercase tracking-widest text-text-dim">{invoice.quote_number || 'General billing'} · {invoice.milestone_title || 'Invoice'}</p>
+                <span className="rounded-full border border-accent-green/25 bg-accent-green/10 px-3 py-1 text-[8px] font-black uppercase tracking-[0.18em] text-accent-green">
+                  {invoice.invoice_number}
+                </span>
+                <h2 className="mt-4 truncate text-xl font-black uppercase tracking-tight text-text-main">{invoice.client_name}</h2>
+                <p className="mt-1 line-clamp-2 text-xs font-bold uppercase tracking-widest text-text-dim">
+                  {invoice.quote_number || 'General billing'} · {invoice.milestone_title || 'Invoice'}
+                </p>
               </div>
-              <p className="shrink-0 text-right text-xl font-black text-accent-green">{money(invoice.total, invoice.currency)}</p>
+              <div className="shrink-0 text-right">
+                <p className="text-[9px] font-black uppercase tracking-widest text-text-dim">Total Due</p>
+                <p className="mt-1 text-2xl font-black text-accent-green">{money(dueSummary.totalDue, invoice.currency)}</p>
+                <p className="mt-1 text-[9px] font-black uppercase tracking-widest text-text-dim">
+                  Paid {money(dueSummary.paid, invoice.currency)}
+                </p>
+              </div>
             </div>
-            <div className="mt-6 grid grid-cols-3 gap-3 border-y border-white/5 py-4">
+            <div className="grid grid-cols-3 gap-3 border-y border-white/5 py-4">
               <Meta label="Issued" value={invoice.issue_date} />
               <Meta label="Due" value={invoice.due_date} />
               <Meta label="Status" value={invoice.status} status={invoice.status} />
             </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-bg-deep/30 p-4 md:grid-cols-4">
+              <Meta label="Subtotal" value={money(dueSummary.projectSubtotal, invoice.currency)} />
+              <Meta label="Paid" value={money(dueSummary.paid, invoice.currency)} />
+              <Meta label="Balance" value={money(dueSummary.accountBalance, invoice.currency)} />
+              <Meta label="VAT" value={money(dueSummary.taxAmount, invoice.currency)} />
+            </div>
             <div className="mt-5 flex flex-wrap gap-2">
-              <button onClick={() => exportInvoicePdf(invoice, business?.[0])} className="flex items-center gap-2 rounded-xl border border-accent-green/30 bg-accent-green/10 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep">
+              <button onClick={() => exportInvoicePdf(invoice, business?.[0], payments || [], clients || [])} className="flex items-center gap-2 rounded-xl border border-accent-green/30 bg-accent-green/10 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep">
                 <Download className="h-3.5 w-3.5" />
                 PDF
               </button>
@@ -194,8 +364,82 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
               )}
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
+      ) : (
+        <div className="overflow-hidden rounded-3xl border border-white/10 bg-white/[0.025] shadow-[0_24px_80px_rgba(0,0,0,0.16)]">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[980px]">
+              <thead>
+                <tr className="border-b border-white/10 bg-white/[0.04] text-left text-[9px] font-black uppercase tracking-[0.18em] text-text-dim">
+                  <th className="px-6 py-5">Invoice</th>
+                  <th className="px-6 py-5">Client</th>
+                  <th className="px-6 py-5">Quote/Milestone</th>
+                  <th className="px-6 py-5">Due Date</th>
+                  <th className="px-6 py-5 text-right">Paid</th>
+                  <th className="px-6 py-5 text-right">Total Due</th>
+                  <th className="px-6 py-5 text-center">Status</th>
+                  <th className="px-6 py-5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {paginatedInvoices.map(invoice => {
+                  const dueSummary = getInvoiceDueSummary(invoice, payments || [], clients || []);
+                  const rowId = String(invoice.id || invoice.pb_id || invoice.invoice_number);
+                  return (
+                    <tr key={rowId} className="group transition-colors hover:bg-white/[0.03]">
+                      <td className="px-6 py-5">
+                        <p className="font-mono text-[10px] font-black uppercase tracking-widest text-accent-green">{invoice.invoice_number}</p>
+                        <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-text-dim">Issued {invoice.issue_date}</p>
+                      </td>
+                      <td className="px-6 py-5">
+                        <p className="max-w-[180px] truncate text-xs font-black uppercase text-text-main">{invoice.client_name}</p>
+                        <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-text-dim">{invoice.client_id}</p>
+                      </td>
+                      <td className="px-6 py-5">
+                        <p className="max-w-[230px] truncate text-xs font-black uppercase text-text-main">{invoice.quote_number || 'General billing'}</p>
+                        <p className="mt-1 max-w-[230px] truncate text-[9px] font-bold uppercase tracking-widest text-text-dim">{invoice.milestone_title || 'Invoice'}</p>
+                      </td>
+                      <td className="px-6 py-5 text-xs font-black text-text-main">{invoice.due_date}</td>
+                      <td className="px-6 py-5 text-right text-xs font-black text-text-main">{money(dueSummary.paid, invoice.currency)}</td>
+                      <td className="px-6 py-5 text-right text-sm font-black text-accent-green">{money(dueSummary.totalDue, invoice.currency)}</td>
+                      <td className="px-6 py-5 text-center">
+                        <span className={cn(
+                          'inline-flex rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest',
+                          invoice.status === 'paid' && 'border-accent-green/30 bg-accent-green/10 text-accent-green',
+                          invoice.status === 'sent' && 'border-blue-400/30 bg-blue-400/10 text-blue-300',
+                          invoice.status === 'draft' && 'border-white/10 bg-white/5 text-text-dim',
+                          invoice.status === 'void' && 'border-red-500/30 bg-red-500/10 text-red-400'
+                        )}>
+                          {invoice.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-5">
+                        <div className="flex justify-end gap-2">
+                          <button onClick={() => exportInvoicePdf(invoice, business?.[0], payments || [], clients || [])} className="rounded-xl border border-accent-green/30 bg-accent-green/10 p-2 text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep" title="Download PDF">
+                            <Download className="h-4 w-4" />
+                          </button>
+                          {invoice.status === 'draft' && (
+                            <button onClick={() => updateStatus(invoice, 'sent')} disabled={updatingId === rowId} className="rounded-xl border border-blue-400/30 bg-blue-400/10 p-2 text-blue-300 transition-all hover:bg-blue-400 hover:text-bg-deep disabled:opacity-40" title="Mark sent">
+                              <Send className="h-4 w-4" />
+                            </button>
+                          )}
+                          {invoice.status !== 'paid' && invoice.status !== 'void' && (
+                            <button onClick={() => updateStatus(invoice, 'paid')} disabled={updatingId === rowId} className="rounded-xl border border-accent-green/30 bg-accent-green/10 p-2 text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep disabled:opacity-40" title="Mark paid">
+                              <CheckCircle2 className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {filteredInvoices.length === 0 && (
         <div className="glass-panel rounded-3xl border-dashed border-white/10 p-12 text-center">
@@ -227,7 +471,11 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
             promises={billablePromises}
             existingInvoiceNumbers={(invoices || []).map(invoice => invoice.invoice_number)}
             clients={clients || []}
+            quotations={quotations || []}
             business={business?.[0]}
+            payments={payments || []}
+            updateEntity={updateEntity}
+            isOnline={isOnline}
             addEntity={addEntity}
             onClose={() => setIsModalOpen(false)}
             onOpenQuotations={setView ? () => setView('quotations') : undefined}
@@ -306,7 +554,11 @@ function InvoiceModal({
   promises,
   existingInvoiceNumbers,
   clients,
+  quotations,
   business,
+  payments,
+  updateEntity,
+  isOnline,
   addEntity,
   onClose,
   onOpenQuotations,
@@ -315,23 +567,70 @@ function InvoiceModal({
   promises: PaymentPromise[];
   existingInvoiceNumbers: string[];
   clients: Client[];
+  quotations: Quotation[];
   business?: BusinessProfile;
+  payments: Payment[];
+  updateEntity: any;
+  isOnline: boolean;
   addEntity: any;
   onClose: () => void;
   onOpenQuotations?: () => void;
   showToast: (message: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }) {
+  const [clientId, setClientId] = useState('');
   const [promiseId, setPromiseId] = useState('');
   const [taxRate, setTaxRate] = useState(0);
   const [notes, setNotes] = useState('Payment is due by the stated due date. Please reference the invoice number when making payment.');
-  const selectedPromise = promises.find(promise => String(promise.id || promise.pb_id) === promiseId);
-  const client = clients.find(item => item.node_id === selectedPromise?.client_id);
+  const selectedClient = clients.find(item => item.node_id === clientId);
+  const clientPromises = promises
+    .filter(promise => !clientId || promise.client_id === clientId)
+    .sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
+  const selectedPromise = clientPromises.find(promise => String(promise.id || promise.pb_id) === promiseId);
+  const client = selectedClient || clients.find(item => item.node_id === selectedPromise?.client_id);
+  const clientPaid = payments
+    .filter(payment => payment.client_id === clientId && payment.status === 'completed')
+    .reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+  const clientAgreed = Number(selectedClient?.agreed_price) || 0;
+  const clientBalance = clientAgreed > 0 ? Math.max(0, clientAgreed - clientPaid) : 0;
+  const selectedAmount = resolveMilestoneAmount(selectedPromise, quotations, clients);
+  const selectedClientPaid = payments
+    .filter(payment => payment.client_id === selectedPromise?.client_id && payment.status === 'completed')
+    .reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+  const selectedClientAgreed = Number(client?.agreed_price) || 0;
+  const selectedAccountBalance = selectedClientAgreed > 0 ? Math.max(0, selectedClientAgreed - selectedClientPaid) : selectedAmount;
 
   const createInvoice = async () => {
+    if (!clientId) {
+      showToast('Select a client first', 'warning');
+      return;
+    }
     if (!selectedPromise) {
       showToast('Select a billable milestone first', 'warning');
       return;
     }
+    const milestoneAmount = resolveMilestoneAmount(selectedPromise, quotations, clients);
+    if (milestoneAmount <= 0) {
+      showToast('This milestone has no billable amount. Update the quote milestone before creating an invoice.', 'warning');
+      return;
+    }
+
+    if ((Number(selectedPromise.amount_due) || 0) <= 0) {
+      await repairMilestoneAmount(selectedPromise, milestoneAmount);
+    }
+
+    const paidForClient = payments
+      .filter(payment => payment.client_id === selectedPromise.client_id && payment.status === 'completed')
+      .reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+    const agreedForClient = Number(client?.agreed_price) || 0;
+    const outstandingBalance = agreedForClient > 0
+      ? Math.max(0, agreedForClient - paidForClient)
+      : milestoneAmount;
+    const invoiceAmount = Math.min(milestoneAmount, outstandingBalance);
+    if (invoiceAmount <= 0) {
+      showToast('This client account is already cleared in Billing', 'info');
+      return;
+    }
+
     const payload = buildInvoicePayload({
       clientId: selectedPromise.client_id,
       invoiceNumber: generateInvoiceNumber(new Date(), existingInvoiceNumbers),
@@ -346,9 +645,11 @@ function InvoiceModal({
       taxRate,
       notes,
       items: [{
-        description: selectedPromise.milestone_title || `Milestone billing for ${selectedPromise.quote_number || selectedPromise.client_id}`,
+        description: outstandingBalance < milestoneAmount
+          ? `Outstanding balance for ${selectedPromise.milestone_title || selectedPromise.quote_number || selectedPromise.client_id}`
+          : selectedPromise.milestone_title || `Milestone billing for ${selectedPromise.quote_number || selectedPromise.client_id}`,
         quantity: 1,
-        unit_price: Number(selectedPromise.amount_due) || 0,
+        unit_price: invoiceAmount,
       }],
     });
     await addEntity('invoices', payload);
@@ -356,18 +657,45 @@ function InvoiceModal({
     onClose();
   };
 
+  const repairMilestoneAmount = async (promise: PaymentPromise, amount: number) => {
+    if (!amount || amount <= 0) return;
+
+    if (typeof promise.id === 'number') {
+      await updateEntity('billing_promises', promise.id, { amount_due: amount });
+      return;
+    }
+
+    if (promise.pb_id) {
+      const local = await db.billing_promises.where('pb_id').equals(promise.pb_id).first();
+      if (local?.id) {
+        await updateEntity('billing_promises', local.id, { amount_due: amount });
+        return;
+      }
+      if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline) {
+        await pb.collection('billing_promises').update(promise.pb_id, { amount_due: amount });
+      }
+      return;
+    }
+
+    if (import.meta.env.VITE_AUTH_MODE === 'pocketbase' && isOnline && typeof promise.id === 'string') {
+      await pb.collection('billing_promises').update(promise.id, { amount_due: amount });
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-bg-deep/80 backdrop-blur-xl" />
-      <motion.div initial={{ opacity: 0, y: 18, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.96 }} className="relative w-full max-w-2xl rounded-3xl border border-white/10 bg-bg-deep p-7 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
-        <div className="mb-7 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[0.22em] text-accent-green">Milestone Invoice</p>
-            <h2 className="mt-2 text-3xl font-black uppercase tracking-tight text-text-main">Generate Invoice</h2>
+      <motion.div initial={{ opacity: 0, y: 18, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 18, scale: 0.96 }} className="relative flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-bg-deep shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
+        <div className="shrink-0 border-b border-white/5 p-6 pb-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-accent-green">Milestone Invoice</p>
+              <h2 className="mt-2 text-3xl font-black uppercase tracking-tight text-text-main">Generate Invoice</h2>
+            </div>
+            <button onClick={onClose} className="rounded-xl bg-white/5 p-3 text-text-dim hover:text-text-main"><X className="h-5 w-5" /></button>
           </div>
-          <button onClick={onClose} className="rounded-xl bg-white/5 p-3 text-text-dim hover:text-text-main"><X className="h-5 w-5" /></button>
         </div>
-        <div className="space-y-5">
+        <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
           {promises.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-6 text-center">
               <ReceiptText className="mx-auto h-8 w-8 text-accent-green/60" />
@@ -386,23 +714,128 @@ function InvoiceModal({
               )}
             </div>
           ) : (
-            <div>
-              <label className="mb-2 block text-[10px] font-black uppercase tracking-[0.2em] text-text-dim">Billable Milestone</label>
-              <select value={promiseId} onChange={event => setPromiseId(event.target.value)} className="w-full rounded-xl border border-white/10 bg-bg-deep px-4 py-3 text-xs font-black uppercase text-text-main outline-none focus:border-accent-green">
-                <option value="">Select pending milestone</option>
-                {promises.map(promise => (
-                  <option key={String(promise.id || promise.pb_id)} value={String(promise.id || promise.pb_id)}>
-                    {(promise.quote_number || 'Billing')} - {promise.milestone_title || 'Milestone'} - KSh {(Number(promise.amount_due) || 0).toLocaleString()}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {selectedPromise && (
-            <div className="rounded-2xl border border-accent-green/20 bg-accent-green/5 p-4">
-              <p className="text-xs font-black uppercase text-text-main">{client?.name || selectedPromise.client_id}</p>
-              <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-text-dim">{selectedPromise.quote_number || 'No quote'} · Due {selectedPromise.due_date}</p>
-            </div>
+            <>
+              <div>
+                <label className="mb-2 block text-[10px] font-black uppercase tracking-[0.2em] text-text-dim">Client</label>
+                <select
+                  value={clientId}
+                  onChange={event => {
+                    setClientId(event.target.value);
+                    setPromiseId('');
+                  }}
+                  className="w-full rounded-xl border border-white/10 bg-bg-deep px-4 py-3 text-xs font-black uppercase text-text-main outline-none focus:border-accent-green"
+                >
+                  <option value="">Select client to invoice</option>
+                  {clients
+                    .filter(client => promises.some(promise => promise.client_id === client.node_id))
+                    .map(client => (
+                      <option key={client.node_id} value={client.node_id}>
+                        {client.name} - {client.node_id}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {selectedClient && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-xs font-black uppercase text-text-main">{selectedClient.name}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-text-dim">{clientPromises.length} invoice-ready milestone{clientPromises.length === 1 ? '' : 's'}</p>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    <Meta label="Project Total" value={money(clientAgreed, business?.currency || 'KSh')} />
+                    <Meta label="Paid" value={money(clientPaid, business?.currency || 'KSh')} />
+                    <Meta label="Balance" value={money(clientBalance, business?.currency || 'KSh')} />
+                  </div>
+                  <p className={cn(
+                    'mt-3 rounded-xl border px-3 py-2 text-[9px] font-black uppercase tracking-widest',
+                    clientAgreed > 0 && clientBalance === 0
+                      ? 'border-accent-green/20 bg-accent-green/10 text-accent-green'
+                      : 'border-amber-400/20 bg-amber-400/10 text-amber-200'
+                  )}>
+                    {clientAgreed > 0 && clientBalance === 0 ? 'Client account cleared' : 'Balance after paid amount is pending'}
+                  </p>
+                </div>
+              )}
+
+              {clientId && (
+                <div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <label className="block text-[10px] font-black uppercase tracking-[0.2em] text-text-dim">Set Milestones</label>
+                    <span className="text-[9px] font-black uppercase tracking-widest text-accent-green">
+                      {selectedPromise ? 'Ready' : 'Select to activate'}
+                    </span>
+                  </div>
+                  {clientPromises.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] p-5 text-center">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-text-dim">No set milestones found for this client</p>
+                    </div>
+                  ) : (
+                    <div className="max-h-[260px] space-y-3 overflow-y-auto pr-1">
+                      {clientPromises.map((promise) => {
+                        const id = String(promise.id || promise.pb_id);
+                        const amount = resolveMilestoneAmount(promise, quotations, clients);
+                        const paid = payments
+                          .filter(payment =>
+                            payment.status === 'completed' &&
+                            (
+                              String(payment.billing_promise_id || '') === id ||
+                              (
+                                payment.client_id === promise.client_id &&
+                                (payment.quote_number || '') === (promise.quote_number || '') &&
+                                (payment.billing_milestone_title || '') === (promise.milestone_title || '')
+                              )
+                            )
+                          )
+                          .reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+                        const balance = Math.max(0, amount - paid);
+                        const isSelected = promiseId === id;
+                        const recovered = (Number(promise.amount_due) || 0) <= 0 && amount > 0;
+
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setPromiseId(id)}
+                            className={cn(
+                              'w-full rounded-2xl border p-4 text-left transition-all',
+                              isSelected
+                                ? 'border-accent-green/60 bg-accent-green/10 shadow-[0_0_22px_rgba(57,255,20,0.16)]'
+                                : 'border-white/10 bg-white/[0.03] hover:border-accent-green/30 hover:bg-accent-green/5'
+                            )}
+                          >
+                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <p className="text-xs font-black uppercase text-text-main">{promise.milestone_title || 'Project milestone'}</p>
+                                <p className="mt-1 text-[9px] font-bold uppercase tracking-widest text-text-dim">
+                                  {promise.quote_number || 'No quote'} · Due {promise.due_date || 'Open'}
+                                </p>
+                              </div>
+                              <span className={cn(
+                                'w-fit rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest',
+                                isSelected ? 'border-accent-green/30 bg-accent-green text-bg-deep' : 'border-white/10 bg-white/5 text-text-dim'
+                              )}>
+                                {isSelected ? 'Selected' : 'Choose'}
+                              </span>
+                            </div>
+                            {recovered && (
+                              <p className="mt-3 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[9px] font-black uppercase tracking-widest text-amber-200">
+                                Amount recovered from quotation total. It will be repaired when the invoice is created.
+                              </p>
+                            )}
+                            <div className="mt-4 grid grid-cols-3 gap-3">
+                              <Meta label="Milestone" value={money(amount, business?.currency || 'KSh')} />
+                              <Meta label="Paid" value={money(paid, business?.currency || 'KSh')} />
+                              <Meta label="Balance" value={money(balance, business?.currency || 'KSh')} />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
           <div>
             <label className="mb-2 block text-[10px] font-black uppercase tracking-[0.2em] text-text-dim">VAT Tax (%)</label>
@@ -413,93 +846,274 @@ function InvoiceModal({
             <textarea value={notes} onChange={event => setNotes(event.target.value)} rows={4} className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-text-main outline-none focus:border-accent-green" />
           </div>
         </div>
-        <button disabled={promises.length === 0} onClick={createInvoice} className="mt-7 flex w-full items-center justify-center gap-2 rounded-xl bg-accent-green px-5 py-4 text-[10px] font-black uppercase tracking-[0.18em] text-bg-deep transition-all disabled:opacity-40">
-          <FileText className="h-4 w-4" />
-          Create Invoice
-        </button>
+        <div className="shrink-0 border-t border-white/5 p-6 pt-4">
+          <button disabled={promises.length === 0 || !clientId || !selectedPromise || selectedAmount <= 0 || selectedAccountBalance <= 0} onClick={createInvoice} className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent-green px-5 py-4 text-[10px] font-black uppercase tracking-[0.18em] text-bg-deep transition-all disabled:opacity-40">
+            <FileText className="h-4 w-4" />
+            Create Invoice
+          </button>
+        </div>
       </motion.div>
     </div>
   );
 }
 
-function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile) {
-  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const items = parseInvoiceItems(invoice.items_json);
-  const currency = invoice.currency || business?.currency || 'KSh';
+function getImageType(dataUrl: string) {
+  if (dataUrl.includes('image/jpeg') || dataUrl.includes('image/jpg')) return 'JPEG';
+  if (dataUrl.includes('image/webp')) return 'WEBP';
+  return 'PNG';
+}
 
-  doc.setFillColor(12, 14, 16);
-  doc.rect(0, 0, pageWidth, 118, 'F');
-  doc.setTextColor(57, 255, 20);
+function drawInvoiceInfoCard(doc: jsPDF, title: string, lines: string[], x: number, y: number, width: number, height: number) {
+  doc.setDrawColor(238, 241, 245);
+  doc.setFillColor(247, 249, 251);
+  doc.roundedRect(x, y, width, height, 8, 8, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
-  doc.text('Invoice', 48, 52);
-  doc.setTextColor(255, 255, 255);
   doc.setFontSize(10);
-  doc.text(invoice.invoice_number, 48, 75);
+  doc.setTextColor(18, 18, 18);
+  doc.text(title, x + 14, y + 20);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(35, 35, 35);
+
+  let lineY = y + 38;
+  for (const line of lines.filter(Boolean).slice(0, 6)) {
+    doc.text(line, x + 14, lineY, { maxWidth: width - 28 });
+    lineY += 13;
+  }
+  doc.setTextColor(0, 0, 0);
+}
+
+function drawInvoiceFooter(doc: jsPDF, invoiceNumber: string) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  doc.setDrawColor(230, 230, 230);
+  doc.line(48, pageHeight - 42, pageWidth - 48, pageHeight - 42);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(120, 120, 120);
+  doc.text(`Invoice ${invoiceNumber}`, 48, pageHeight - 24);
+  doc.text('Generated by Rafiki Business Manager', pageWidth - 48, pageHeight - 24, { align: 'right' });
+  doc.setTextColor(0, 0, 0);
+}
+
+function drawInvoiceLogo(doc: jsPDF, business: BusinessProfile | undefined, x: number, y: number) {
+  const badgeSize = 70;
+  const centerX = x + badgeSize / 2;
+  const centerY = y + badgeSize / 2;
+
+  doc.setFillColor(13, 13, 13);
+  doc.circle(centerX, centerY, badgeSize / 2, 'F');
 
   if (business?.logo_base64) {
-    doc.addImage(business.logo_base64, 'PNG', pageWidth - 142, 34, 74, 52, undefined, 'FAST');
-  } else {
-    doc.setFontSize(16);
-    doc.text(business?.name || 'Rafiki', pageWidth - 150, 58);
+    try {
+      const image = doc.getImageProperties(business.logo_base64);
+      const maxSize = 52;
+      const ratio = Math.min(maxSize / image.width, maxSize / image.height);
+      const width = image.width * ratio;
+      const height = image.height * ratio;
+      doc.addImage(
+        business.logo_base64,
+        getImageType(business.logo_base64),
+        centerX - width / 2,
+        centerY - height / 2,
+        width,
+        height,
+        undefined,
+        'FAST'
+      );
+    } catch {
+      doc.setTextColor(57, 255, 20);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.text((business.name || 'RB').slice(0, 2).toUpperCase(), centerX, centerY + 5, { align: 'center' });
+    }
   }
 
-  doc.setTextColor(30, 30, 30);
-  doc.setFontSize(9);
-  doc.text(business?.name || 'Rafiki Business', 48, 148);
-  doc.setFont('helvetica', 'normal');
-  doc.text([business?.email, business?.phone, business?.website].filter(Boolean).join('  |  ') || 'Business profile details', 48, 164);
+  doc.setDrawColor(235, 238, 242);
+  doc.setLineWidth(1.4);
+  doc.circle(centerX, centerY, badgeSize / 2 + 1.5, 'S');
+  doc.setDrawColor(18, 18, 18);
+  doc.setLineWidth(1);
+  doc.circle(centerX, centerY, badgeSize / 2 - 6, 'S');
+  doc.setTextColor(0, 0, 0);
+}
 
+function exportInvoicePdf(invoice: Invoice, business?: BusinessProfile, payments: Payment[] = [], clients: Client[] = []) {
+  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const items = parseInvoiceItems(invoice.items_json);
+  const currency = invoice.currency || business?.currency || 'KSh';
+  const dueSummary = getInvoiceDueSummary(invoice, payments, clients);
+  const safePaid = Math.max(0, Number(dueSummary.paid) || 0);
+  const safeBalance = Math.max(0, Number(dueSummary.accountBalance) || 0);
+  const safeTax = Math.max(0, Number(dueSummary.taxAmount) || 0);
+  const safeTotalDue = Math.max(0, Number(dueSummary.totalDue) || 0);
+  const displayItems = safeBalance > 0 && safeBalance < (Number(invoice.subtotal) || Number(invoice.total) || 0)
+    ? [{
+        description: `Outstanding balance for ${invoice.milestone_title || invoice.quote_number || invoice.client_name}`,
+        quantity: 1,
+        total: safeBalance,
+      }]
+    : items;
+
+  doc.setTextColor(18, 18, 18);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(26);
+  doc.text('Invoice', 48, 66);
+
+  doc.setTextColor(120, 120, 120);
+  doc.setFontSize(9);
+  doc.text('Invoice #', 48, 104);
+  doc.text('Invoice Date', 48, 128);
+  doc.setTextColor(25, 25, 25);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
-  doc.text('Bill To', 48, 205);
-  doc.setFont('helvetica', 'normal');
-  doc.text(invoice.client_name, 48, 222);
-  doc.text(invoice.client_id, 48, 238);
+  doc.text(invoice.invoice_number, 150, 104);
+  doc.text(invoice.issue_date, 150, 128);
 
-  doc.setFont('helvetica', 'bold');
-  doc.text('Invoice Details', pageWidth - 210, 205);
-  doc.setFont('helvetica', 'normal');
-  doc.text(`Issue: ${invoice.issue_date}`, pageWidth - 210, 222);
-  doc.text(`Due: ${invoice.due_date}`, pageWidth - 210, 238);
-  doc.text(`Status: ${invoice.status.toUpperCase()}`, pageWidth - 210, 254);
+  const identityX = pageWidth - 246;
+  const logoX = identityX;
+  const textX = identityX + 86;
+  const textMaxWidth = pageWidth - textX - 48;
 
-  let y = 304;
-  doc.setFillColor(244, 246, 248);
-  doc.rect(48, y - 22, pageWidth - 96, 34, 'F');
+  drawInvoiceLogo(doc, business, logoX, 38);
+  doc.setTextColor(18, 18, 18);
   doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  const businessNameLines = doc.splitTextToSize(business?.name || 'Rafiki Business Manager', textMaxWidth);
+  doc.text(businessNameLines.slice(0, 3), textX, 60);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 100, 100);
+  let businessContactY = 64 + (Math.min(businessNameLines.length, 3) * 14);
+  if (business?.phone) {
+    doc.text(`Tel: ${business.phone}`, textX, businessContactY, { maxWidth: textMaxWidth });
+    businessContactY += 13;
+  }
+  if (business?.website) {
+    doc.text(business.website, textX, businessContactY, { maxWidth: textMaxWidth });
+  }
+
+  const byLines = [
+    business?.name || 'Rafiki Code Solutions',
+    business?.address || 'Nairobi, Kenya',
+    business?.phone || 'Contact Number Not Set',
+    business?.email || business?.website || 'www.rafikicode.com',
+    business?.till_number ? `Till: ${business.till_number}` : '',
+  ];
+  const toLines = [
+    invoice.client_name || 'Valued Client',
+    invoice.client_id,
+    invoice.quote_number ? `Quote: ${invoice.quote_number}` : '',
+    invoice.milestone_title ? `Milestone: ${invoice.milestone_title}` : '',
+    `Due date: ${invoice.due_date}`,
+  ];
+
+  drawInvoiceInfoCard(doc, 'Invoice by', byLines, 48, 172, 220, 120);
+  drawInvoiceInfoCard(doc, 'Invoice to', toLines, 308, 172, 239, 120);
+
+  let y = 338;
+  doc.setFillColor(20, 20, 20);
+  doc.roundedRect(48, y - 24, pageWidth - 96, 34, 7, 7, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(255, 255, 255);
   doc.text('Description', 62, y);
   doc.text('Qty', pageWidth - 190, y, { align: 'right' });
   doc.text('Amount', pageWidth - 62, y, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   y += 34;
-  items.forEach(item => {
-    doc.text(doc.splitTextToSize(item.description, 310), 62, y);
+  displayItems.forEach((item, index) => {
+    const descriptionLines = doc.splitTextToSize(item.description, 315);
+    const rowHeight = Math.max(36, descriptionLines.length * 12 + 18);
+    if (y + rowHeight > pageHeight - 150) {
+      drawInvoiceFooter(doc, invoice.invoice_number);
+      doc.addPage();
+      y = 70;
+      doc.setFillColor(20, 20, 20);
+      doc.roundedRect(48, y - 24, pageWidth - 96, 34, 7, 7, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(255, 255, 255);
+      doc.text('Description', 62, y);
+      doc.text('Qty', pageWidth - 190, y, { align: 'right' });
+      doc.text('Amount', pageWidth - 62, y, { align: 'right' });
+      y += 34;
+    }
+
+    if (index % 2 === 0) {
+      doc.setFillColor(250, 250, 250);
+      doc.rect(48, y - 16, pageWidth - 96, rowHeight, 'F');
+    }
+    doc.setTextColor(18, 18, 18);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.text(descriptionLines, 62, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(80, 80, 80);
     doc.text(String(item.quantity), pageWidth - 190, y, { align: 'right' });
+    doc.setTextColor(18, 18, 18);
+    doc.setFont('helvetica', 'bold');
     doc.text(money(item.total, currency), pageWidth - 62, y, { align: 'right' });
-    y += 34;
+    y += rowHeight;
   });
 
-  y += 20;
+  y += 22;
+  if (y > pageHeight - 210) {
+    drawInvoiceFooter(doc, invoice.invoice_number);
+    doc.addPage();
+    y = 70;
+  }
+
+  const summaryY = y;
+  const summaryX = pageWidth - 278;
+  const summaryW = 230;
+  doc.setDrawColor(225, 230, 235);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(summaryX, summaryY - 20, summaryW, 142, 8, 8, 'FD');
   doc.setFont('helvetica', 'bold');
-  doc.text('Subtotal', pageWidth - 210, y);
-  doc.text(money(invoice.subtotal, currency), pageWidth - 62, y, { align: 'right' });
+  doc.setFontSize(11);
+  doc.setTextColor(40, 45, 55);
+  doc.text('Client Account Summary', summaryX + 16, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(70, 75, 85);
   y += 18;
-  doc.text(`VAT Tax (${invoice.tax_rate || 0}%)`, pageWidth - 210, y);
-  doc.text(money(invoice.tax_amount, currency), pageWidth - 62, y, { align: 'right' });
-  y += 26;
+  doc.text('Subtotal', summaryX + 16, y);
+  doc.text(money(dueSummary.projectSubtotal, currency), summaryX + summaryW - 16, y, { align: 'right' });
+  y += 16;
+  doc.text('Paid', summaryX + 16, y);
+  doc.text(money(safePaid, currency), summaryX + summaryW - 16, y, { align: 'right' });
+  y += 16;
+  doc.text('Account Balance', summaryX + 16, y);
+  doc.text(money(safeBalance, currency), summaryX + summaryW - 16, y, { align: 'right' });
+  y += 16;
+  doc.text(`VAT Tax (${invoice.tax_rate || 0}%)`, summaryX + 16, y);
+  doc.text(money(safeTax, currency), summaryX + summaryW - 16, y, { align: 'right' });
+  y += 18;
+  doc.setDrawColor(220, 225, 230);
+  doc.line(summaryX + 16, y - 10, summaryX + summaryW - 16, y - 10);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(20, 20, 20);
   doc.setFontSize(14);
-  doc.text('Total Due', pageWidth - 210, y);
-  doc.text(money(invoice.total, currency), pageWidth - 62, y, { align: 'right' });
-  drawBusinessStamp(doc, business, 48, y - 52);
+  doc.text('Total Due', summaryX + 16, y + 4);
+  doc.text(money(safeTotalDue, currency), summaryX + summaryW - 16, y + 4, { align: 'right' });
+
+  y = summaryY + 142;
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'normal');
+
+  drawBusinessStamp(doc, business, 48, summaryY - 14);
 
   if (invoice.notes) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.text(doc.splitTextToSize(invoice.notes, pageWidth - 96), 48, y + 55);
+    doc.setTextColor(55, 65, 75);
+    doc.text(doc.splitTextToSize(invoice.notes, pageWidth - 96), 48, y + 30);
   }
 
+  drawInvoiceFooter(doc, invoice.invoice_number);
   doc.save(`${invoice.invoice_number}.pdf`);
 }
 

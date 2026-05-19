@@ -63,7 +63,12 @@ export function Billing() {
   const totalPaid = clientPayments?.reduce((sum, p) => sum + p.amount, 0) || 0;
   const balance = selectedClient ? selectedClient.agreed_price - totalPaid : 0;
   const openClientPromises = (billingPromises || [])
-    .filter(promise => promise.client_id === formData.client_id && promise.status !== 'fulfilled')
+    .filter(promise =>
+      promise.client_id === formData.client_id &&
+      promise.status === 'pending' &&
+      !!promise.quote_number &&
+      !!promise.milestone_title
+    )
     .sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
   const selectedPromise = openClientPromises.find(promise => String(promise.id || promise.pb_id) === formData.billing_promise_id);
   const selectedInvoice = (invoices || []).find(invoice =>
@@ -96,6 +101,43 @@ export function Billing() {
     } finally {
       setIsVerifying(false);
     }
+  };
+
+  const paymentMatchesPromise = (payment: any, promise: PaymentPromise) => {
+    const promiseId = String(promise.id || promise.pb_id || '');
+    return payment.status === 'completed' &&
+      (
+        String(payment.billing_promise_id || '') === promiseId ||
+        (
+          payment.client_id === promise.client_id &&
+          (payment.quote_number || '') === (promise.quote_number || '') &&
+          (payment.billing_milestone_title || '') === (promise.milestone_title || '')
+        )
+      );
+  };
+
+  const paymentMatchesInvoice = (payment: any, invoice: Invoice) => {
+    return payment.status === 'completed' &&
+      (
+        String(payment.billing_promise_id || '') === String(invoice.billing_promise_id || '') ||
+        (
+          payment.client_id === invoice.client_id &&
+          (payment.quote_number || '') === (invoice.quote_number || '') &&
+          (payment.billing_milestone_title || '') === (invoice.milestone_title || '')
+        )
+      );
+  };
+
+  const getPaidAfterThisEntry = (matcher: (payment: any) => boolean, payload: any) => {
+    const currentPaymentId = editingPayment ? String(editingPayment.id || editingPayment.pb_id || editingPayment.transaction_id) : '';
+    const existingPaid = (payments || [])
+      .filter(payment => {
+        const paymentId = String(payment.id || payment.pb_id || payment.transaction_id);
+        return matcher(payment) && (!currentPaymentId || paymentId !== currentPaymentId);
+      })
+      .reduce((sum: number, payment: any) => sum + (Number(payment.amount) || 0), 0);
+
+    return existingPaid + (Number(payload.amount) || 0);
   };
 
   const handleRecordPayment = async (e: React.FormEvent) => {
@@ -140,10 +182,32 @@ export function Billing() {
       }
 
       if (selectedPromise && payload.status === 'completed') {
-        await markPromiseFulfilled(selectedPromise);
+        const promisePaid = getPaidAfterThisEntry(
+          payment => paymentMatchesPromise(payment, selectedPromise),
+          payload
+        );
+        const clientPaid = getPaidAfterThisEntry(
+          payment => payment.client_id === payload.client_id && payment.status === 'completed',
+          payload
+        );
+        const clientCleared = selectedClient?.agreed_price ? clientPaid >= Number(selectedClient.agreed_price) : false;
+        if (promisePaid >= (Number(selectedPromise.amount_due) || 0) || clientCleared) {
+          await markPromiseFulfilled(selectedPromise);
+        }
       }
       if (selectedInvoice && payload.status === 'completed') {
-        await markInvoicePaid(selectedInvoice);
+        const invoicePaid = getPaidAfterThisEntry(
+          payment => paymentMatchesInvoice(payment, selectedInvoice),
+          payload
+        );
+        const clientPaid = getPaidAfterThisEntry(
+          payment => payment.client_id === payload.client_id && payment.status === 'completed',
+          payload
+        );
+        const clientCleared = selectedClient?.agreed_price ? clientPaid >= Number(selectedClient.agreed_price) : false;
+        if (invoicePaid >= (Number(selectedInvoice.total) || 0) || clientCleared) {
+          await markInvoicePaid(selectedInvoice);
+        }
       }
 
       setIsFormOpen(false);
@@ -615,7 +679,7 @@ export function Billing() {
         {[
           { label: 'Total Collected', value: `KSh ${((payments || []).reduce((acc: number, p: any) => acc + (p.status === 'completed' ? p.amount : 0), 0)).toLocaleString()}` },
           { label: 'Transactions', value: `${(payments || []).length}` },
-          { label: 'Pending Milestones', value: `${(billingPromises || []).filter(promise => promise.status === 'pending').length}` },
+          { label: 'Pending Milestones', value: `${(billingPromises || []).filter(promise => promise.status === 'pending' && promise.quote_number && promise.milestone_title).length}` },
           { label: 'This Month', value: (() => {
             const now = new Date();
             const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;

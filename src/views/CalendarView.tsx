@@ -45,34 +45,19 @@ export function CalendarView({ setView }: CalendarViewProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState('');
   const [meetingsPage, setMeetingsPage] = useState(1);
-  const [promisesPage, setPromisesPage] = useState(1);
   const itemsPerPage = 4;
 
   // Queries
   const clients = useLiveQuery(() => db.clients.toArray());
   const meetings = useLiveQuery(() => db.meetings.toArray());
-  const promises = useLiveQuery(() => db.billing_promises.toArray());
 
-  // Aggregate all "temporal occurrences" with Multi-Stream distinction
+  // Aggregate schedule events (meetings + agreed payment dates)
   const allEvents = [
     ...(meetings || []).map(m => ({ 
       ...m, 
       category: 'meeting' as const,
       location: m.location || '',
       accentColor: 'accent-green'
-    })),
-    ...(promises || []).map(p => ({ 
-      id: p.id, 
-      client_id: p.client_id,
-      summary: `Expectation: KSh ${p.amount_due}`, 
-      start_time: p.due_date,
-      type: 'Other' as const,
-      category: 'promise' as const,
-      status: p.status,
-      amount: p.amount_due,
-      payment_method: p.payment_method,
-      location: '',
-      accentColor: 'amber-500'
     })),
     ...(clients || []).filter(c => c.initial_meeting).map(c => ({
       id: `kickoff-${c.node_id}`,
@@ -87,15 +72,12 @@ export function CalendarView({ setView }: CalendarViewProps) {
     ...(clients || []).filter(c => c.target_payment).map(c => ({
       id: `payment-${c.node_id}`,
       client_id: c.node_id,
-      summary: `Payment Due: ${c.name}`,
+      summary: `Agreed Payment Date: ${c.name}`,
       start_time: c.target_payment,
       type: 'Other' as const,
-      category: 'promise' as const,
-      status: 'pending',
-      amount: c.agreed_price,
-      payment_method: 'Mpesa',
+      category: 'meeting' as const,
       location: '',
-      accentColor: 'amber-500'
+      accentColor: 'accent-green'
     }))
   ];
 
@@ -125,37 +107,11 @@ export function CalendarView({ setView }: CalendarViewProps) {
   );
 
   const dailyMeetings = filteredEvents.filter(e => e.category === 'meeting');
-  const dailyPromises = filteredEvents.filter(e => e.category === 'promise');
 
   // Pagination logic
   const paginatedMeetings = dailyMeetings.slice((meetingsPage - 1) * itemsPerPage, meetingsPage * itemsPerPage);
-  const paginatedPromises = dailyPromises.slice((promisesPage - 1) * itemsPerPage, promisesPage * itemsPerPage);
 
   const totalMeetingPages = Math.ceil(dailyMeetings.length / itemsPerPage);
-  const totalPromisePages = Math.ceil(dailyPromises.length / itemsPerPage);
-
-  const handleMarkAsReceived = async (promiseId: number) => {
-    const promise = await db.billing_promises.get(promiseId);
-    if (!promise) return;
-
-    await db.billing_promises.update(promiseId, { status: 'fulfilled' });
-    
-    // Also record a payment potentially
-    await db.payments.add({
-      client_id: promise.client_id,
-      quote_id: promise.quote_id,
-      quote_number: promise.quote_number,
-      billing_promise_id: String(promise.id || promise.pb_id || ''),
-      billing_milestone_title: promise.milestone_title,
-      amount: promise.amount_due,
-      method: promise.payment_method || 'Mpesa',
-      status: 'completed',
-      date: new Date().toISOString(),
-      transaction_id: `REC-${Date.now()}`,
-      idempotency_key: `IDEM-${promiseId}-${Date.now()}`,
-      synced: false
-    });
-  };
 
   return (
     <div className="space-y-8 pb-32">
@@ -214,7 +170,6 @@ export function CalendarView({ setView }: CalendarViewProps) {
               {days.map((day, i) => {
                 const dayEvents = allEvents.filter(e => isSameDay(parseISO(e.start_time), day));
                 const dayMeetings = dayEvents.filter(e => e.category === 'meeting');
-                const dayPromises = dayEvents.filter(e => e.category === 'promise');
                 
                 const isToday = isSameDay(day, new Date());
                 const isSelected = isSameDay(day, selectedDate);
@@ -265,13 +220,10 @@ export function CalendarView({ setView }: CalendarViewProps) {
                         </p>
                       )}
                       
-                      {/* Multi-Stream Dot Indicators */}
+                      {/* Dot Indicator */}
                       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
                         {dayMeetings.length > 0 && (
                           <div className="w-1 h-1 rounded-full bg-accent-green shadow-neon animate-pulse" />
-                        )}
-                        {dayPromises.length > 0 && (
-                          <div className="w-1 h-1 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(255,176,0,0.8)] animate-pulse" />
                         )}
                       </div>
                     </div>
@@ -285,16 +237,12 @@ export function CalendarView({ setView }: CalendarViewProps) {
           <div className="mt-6 flex flex-wrap gap-6 px-4">
              <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-accent-green shadow-neon" />
-                <span className="text-[9px] font-black text-text-dim uppercase tracking-[0.2em]">Operational Node (Meeting)</span>
-             </div>
-             <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(255,176,0,0.8)]" />
-                <span className="text-[9px] font-black text-text-dim uppercase tracking-[0.2em]">Financial Node (Promise)</span>
+                <span className="text-[9px] font-black text-text-dim uppercase tracking-[0.2em]">Meetings & Agreed Payment Dates</span>
              </div>
           </div>
         </div>
 
-        {/* Sidebar: Daily Schedule Detail Panel with Segmentation */}
+        {/* Sidebar: Daily Schedule Detail Panel */}
         <div className="lg:col-span-1 space-y-10">
           {/* Sidebar Search */}
           <div className="relative group">
@@ -306,7 +254,6 @@ export function CalendarView({ setView }: CalendarViewProps) {
               onChange={(e) => {
                 setSidebarSearch(e.target.value);
                 setMeetingsPage(1);
-                setPromisesPage(1);
               }}
               className="w-full bg-text-main/[0.03] border border-white/5 rounded-2xl py-4 pl-12 pr-4 text-[10px] font-black text-text-main focus:outline-none focus:border-accent-green/30 transition-all uppercase tracking-widest placeholder:text-text-dim/20"
             />
@@ -317,7 +264,7 @@ export function CalendarView({ setView }: CalendarViewProps) {
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-black text-text-main uppercase tracking-[0.2em] flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-accent-green shadow-neon" />
-                Operational Schedule
+                Daily Schedule
               </h3>
               {totalMeetingPages > 1 && (
                 <div className="flex items-center gap-1">
@@ -351,6 +298,7 @@ export function CalendarView({ setView }: CalendarViewProps) {
                 <AnimatePresence mode="popLayout">
                   {paginatedMeetings.map((event, i) => {
                     const client = clients?.find(c => c.node_id === event.client_id || c.id?.toString() === event.client_id);
+                    const isPaymentDate = event.summary.startsWith('Agreed Payment Date:');
                     return (
                       <motion.div 
                         key={`meeting-${event.id || i}`}
@@ -362,7 +310,7 @@ export function CalendarView({ setView }: CalendarViewProps) {
                       >
                         <div className="flex items-start justify-between mb-3">
                           <div className="flex items-center gap-2">
-                            <Video className="w-4 h-4 text-accent-green" />
+                            {isPaymentDate ? <Clock className="w-4 h-4 text-accent-green" /> : <Video className="w-4 h-4 text-accent-green" />}
                             <span className="text-[9px] font-black text-text-dim uppercase tracking-widest tabular-nums">
                               {format(parseISO(event.start_time), 'p')}
                             </span>
@@ -377,102 +325,6 @@ export function CalendarView({ setView }: CalendarViewProps) {
                           {event.summary}
                         </h4>
                         {client && <p className="text-[8px] text-text-dim uppercase font-bold tracking-[0.1em] truncate">Client: {client.name}</p>}
-                      </motion.div>
-                    );
-                  })}
-                </AnimatePresence>
-              )}
-            </div>
-          </div>
-
-          {/* Promises Section */}
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black text-text-main uppercase tracking-[0.2em] flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_10px_rgba(255,176,0,0.8)]" />
-                Financial Schedule
-              </h3>
-              {totalPromisePages > 1 && (
-                <div className="flex items-center gap-1">
-                  <button 
-                    disabled={promisesPage === 1}
-                    onClick={() => setPromisesPage(p => Math.max(1, p - 1))}
-                    className="p-1.5 rounded-lg bg-white/5 text-text-dim disabled:opacity-20 hover:text-accent-green transition-all"
-                  >
-                    <ChevronLeft className="w-3 h-3" />
-                  </button>
-                  <span className="text-[8px] font-black text-text-dim tabular-nums px-1">{promisesPage}/{totalPromisePages}</span>
-                  <button 
-                    disabled={promisesPage === totalPromisePages}
-                    onClick={() => setPromisesPage(p => Math.min(totalPromisePages, p + 1))}
-                    className="p-1.5 rounded-lg bg-white/5 text-text-dim disabled:opacity-20 hover:text-accent-green transition-all"
-                  >
-                    <ChevronRight className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              {paginatedPromises.length === 0 ? (
-                <div className="p-10 text-center glass-panel !bg-text-main/5 border-dashed rounded-[2rem] border-white/5 flex flex-col items-center gap-3 opacity-40">
-                  <p className="text-[9px] font-black text-text-dim uppercase tracking-widest italic tracking-tighter">
-                    {sidebarSearch ? 'No matching entries' : 'No payments found'}
-                  </p>
-                </div>
-              ) : (
-                <AnimatePresence mode="popLayout">
-                  {paginatedPromises.map((event, i) => {
-                    const client = clients?.find(c => c.node_id === event.client_id || c.id?.toString() === event.client_id);
-                    const isFulfilled = event.status === 'fulfilled';
-                    
-                    return (
-                      <motion.div 
-                        key={`promise-${event.id || i}`}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        transition={{ duration: 0.2 }}
-                        className={cn(
-                          "glass-panel p-5 rounded-[2rem] border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-all group border-l-4",
-                          isFulfilled ? "border-l-accent-green shadow-[0_0_20px_rgba(57,255,20,0.05)]" : "border-l-amber-500 shadow-[0_0_20px_rgba(255,176,0,0.1)]"
-                        )}
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <Zap className={cn("w-4 h-4", isFulfilled ? "text-accent-green" : "text-amber-500")} />
-                            <span className="text-[9px] font-black text-text-dim uppercase tracking-widest tabular-nums">
-                              EXPECTED: {(event as any).payment_method || 'ANY'}
-                            </span>
-                          </div>
-                          {isFulfilled ? (
-                            <div className="w-6 h-6 rounded-lg bg-accent-green/10 flex items-center justify-center border border-accent-green/20">
-                               <ShieldCheck className="w-3.5 h-3.5 text-accent-green" />
-                            </div>
-                          ) : (
-                            <button 
-                              onClick={() => handleMarkAsReceived(Number(event.id))}
-                              className="text-[8px] font-black text-amber-500 border border-amber-500/20 bg-amber-500/5 px-3 py-1.5 rounded-xl hover:bg-amber-500 hover:text-bg-deep transition-all uppercase tracking-widest"
-                            >
-                              Mark Received
-                            </button>
-                          )}
-                        </div>
-                        
-                        <div className="flex items-end justify-between">
-                          <div>
-                            <h4 className="text-xs font-black text-text-main uppercase tracking-tight mb-1">
-                              {event.summary}
-                            </h4>
-                            {client && <p className="text-[8px] text-text-dim uppercase font-bold tracking-[0.1em] truncate">Source: {client.name}</p>}
-                          </div>
-                          <div className={cn(
-                            "text-md font-black italic tracking-tighter tabular-nums",
-                            isFulfilled ? "text-accent-green" : "text-amber-400"
-                          )}>
-                             KSh {event.amount?.toLocaleString()}
-                          </div>
-                        </div>
                       </motion.div>
                     );
                   })}

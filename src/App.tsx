@@ -8,7 +8,6 @@ import { Quotations } from './views/Quotations';
 import { Invoices } from './views/Invoices';
 import { Agreements } from './views/Agreements';
 import { Expenses } from './views/Expenses';
-import { Meetings } from './views/Meetings';
 import { PocketHost } from './views/PocketHost';
 import { Settings } from './views/Settings';
 import { ClientHub } from './views/ClientHub';
@@ -100,7 +99,7 @@ export default function App() {
       case 'invoices': return <Invoices setView={setCurrentView} />;
       case 'agreements': return <Agreements />;
       case 'expenses': return <Expenses />;
-      case 'meetings': return <Meetings />;
+      case 'meetings': return <CalendarView setView={setCurrentView} />;
       case 'settings': return <Settings />;
       case 'clients': return <ClientHub />;
       case 'reports': return <Reports />;

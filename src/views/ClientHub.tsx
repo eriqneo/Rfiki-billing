@@ -354,31 +354,6 @@ function ClientProfileModal({ onClose, editingClient }: ClientProfileModalProps)
       } else {
         await addEntity('clients', clientData);
         
-        // Auto-schedule Kick-off Meeting
-        if (formData.initial_meeting) {
-          const meetingStartTime = new Date(formData.initial_meeting);
-          const meetingEndTime = new Date(meetingStartTime.getTime() + 60 * 60 * 1000);
-          
-          await addEntity('meetings', {
-            client_id: newNodeId,
-            summary: `Kick-off Meeting: ${formData.name}`,
-            description: `Initial project synchronization for ${formData.project_tag || 'new project'}.`,
-            start_time: meetingStartTime.toISOString(),
-            end_time: meetingEndTime.toISOString(),
-            type: 'Discovery'
-          });
-        }
-
-        // Auto-schedule Payment Promise
-        if (formData.target_payment) {
-          await addEntity('billing_promises', {
-            amount_due: parseFloat(formData.agreed_price) || 0,
-            due_date: formData.target_payment,
-            client_id: newNodeId,
-            status: 'pending'
-          });
-        }
-        
         showToast('New client profile established', 'success');
       }
       onClose();

@@ -68,7 +68,6 @@ export function Sidebar({ currentView, setView, isSyncing, cloudBackoff }: Sideb
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'clients', label: 'Client Hub', icon: Users },
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
-    { id: 'meetings', label: 'Meetings', icon: Video },
     { id: 'billing', label: 'Billing', icon: CreditCard },
     { id: 'quotations', label: 'Quotations', icon: ReceiptText },
     { id: 'invoices', label: 'Invoices', icon: FileText },
@@ -85,7 +84,6 @@ export function Sidebar({ currentView, setView, isSyncing, cloudBackoff }: Sideb
     { id: 'billing', label: 'Billing', icon: CreditCard },
     { id: 'quotations', label: 'Quotes', icon: ReceiptText },
     { id: 'invoices', label: 'Invoices', icon: FileText },
-    { id: 'meetings', label: 'Meetings', icon: Video },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 

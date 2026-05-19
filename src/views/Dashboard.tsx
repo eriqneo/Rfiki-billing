@@ -35,15 +35,14 @@ export function Dashboard({ setView }: { setView: (view: any) => void }) {
   const activeAgreements = (agreements || []).filter((a: any) => a.status === 'active').length;
   const pendingPayments = (payments || []).filter((p: any) => p.status === 'pending').length;
   const today = new Date().toISOString().split('T')[0];
-  const billingClearanceRows = (payments || []).map((payment: any) => {
-    const client = (clients || []).find((item: any) => item.node_id === payment.client_id);
+  const billingClearanceRows = (clients || []).map((client: any) => {
     const totalPaid = (payments || [])
-      .filter((item: any) => item.client_id === payment.client_id && item.status === 'completed')
+      .filter((item: any) => item.client_id === client.node_id && item.status === 'completed')
       .reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
     const agreedPrice = Number(client?.agreed_price) || 0;
     const balance = Math.max(0, agreedPrice - totalPaid);
     return {
-      payment,
+      clientId: client.node_id,
       agreedPrice,
       balance,
       isPendingClearance: agreedPrice > 0 && balance > 0,
