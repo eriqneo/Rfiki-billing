@@ -130,6 +130,17 @@ function getInvoiceDueSummary(invoice: Invoice, payments: Payment[] = [], client
   };
 }
 
+function invoiceAccountKey(invoice: Pick<Invoice, 'client_id' | 'quote_number' | 'invoice_number'>) {
+  return `${invoice.client_id || 'client'}:${invoice.quote_number || invoice.invoice_number || 'general'}`;
+}
+
+function getEffectiveInvoiceStatus(invoice: Invoice, payments: Payment[] = [], clients: Client[] = []) {
+  if (invoice.status === 'void') return invoice.status;
+  const dueSummary = getInvoiceDueSummary(invoice, payments, clients);
+  if (dueSummary.accountBalance <= 0 || dueSummary.totalDue <= 0) return 'paid' as const;
+  return invoice.status === 'paid' ? 'sent' as const : invoice.status;
+}
+
 export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
   const { data: invoices } = useUnifiedCollection<Invoice>('invoices', () => db.invoices.orderBy('id').reverse().toArray());
   const { data: promises } = useUnifiedCollection<PaymentPromise>('billing_promises', () => db.billing_promises.toArray());
@@ -147,15 +158,33 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
   const [currentPage, setCurrentPage] = useState(1);
 
   const filteredInvoices = useMemo(() => {
-    return (invoices || [])
+    const visibleByAccount = new Map<string, Invoice>();
+
+    for (const invoice of (invoices || [])) {
+      const key = invoiceAccountKey(invoice);
+      const existing = visibleByAccount.get(key);
+      if (!existing) {
+        visibleByAccount.set(key, invoice);
+        continue;
+      }
+
+      const existingTime = `${existing.issue_date || ''}:${String(existing.id || existing.pb_id || existing.invoice_number)}`;
+      const invoiceTime = `${invoice.issue_date || ''}:${String(invoice.id || invoice.pb_id || invoice.invoice_number)}`;
+      if (invoiceTime.localeCompare(existingTime) > 0) {
+        visibleByAccount.set(key, invoice);
+      }
+    }
+
+    return Array.from(visibleByAccount.values())
       .filter(invoice => {
         const haystack = `${invoice.invoice_number} ${invoice.client_name} ${invoice.client_id} ${invoice.quote_number || ''} ${invoice.milestone_title || ''}`.toLowerCase();
         const matchesSearch = haystack.includes(search.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || invoice.status === statusFilter;
+        const effectiveStatus = getEffectiveInvoiceStatus(invoice, payments || [], clients || []);
+        const matchesStatus = statusFilter === 'all' || effectiveStatus === statusFilter;
         return matchesSearch && matchesStatus;
       })
       .sort((a, b) => String(b.issue_date || '').localeCompare(String(a.issue_date || '')));
-  }, [invoices, search, statusFilter]);
+  }, [clients, invoices, payments, search, statusFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -169,25 +198,39 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
 
   const existingPromiseIds = new Set((invoices || []).map(invoice => invoice.billing_promise_id).filter(Boolean));
   const existingPromiseKeys = new Set((invoices || []).map(invoice => `${invoice.client_id}:${invoice.quote_number || ''}:${invoice.milestone_title || ''}`));
+  const existingAccountKeys = new Set((invoices || []).filter(invoice => invoice.status !== 'void').map(invoiceAccountKey));
   const billablePromises = (promises || [])
     .filter(promise => {
       const promiseKey = `${promise.client_id}:${promise.quote_number || ''}:${promise.milestone_title || ''}`;
+      const accountKey = `${promise.client_id || 'client'}:${promise.quote_number || promise.quote_id || 'general'}`;
       return isInvoiceReadyPromise(promise, quotations || [], clients || []) &&
         !existingPromiseIds.has(String(promise.id || promise.pb_id || '')) &&
-        !existingPromiseKeys.has(promiseKey);
+        !existingPromiseKeys.has(promiseKey) &&
+        !existingAccountKeys.has(accountKey);
     })
     .sort((a, b) => String(a.due_date || '').localeCompare(String(b.due_date || '')));
 
   const totals = {
-    draft: (invoices || []).filter(invoice => invoice.status === 'draft').length,
-    sent: (invoices || []).filter(invoice => invoice.status === 'sent').length,
-    paid: (invoices || []).filter(invoice => invoice.status === 'paid').length,
-    receivable: (invoices || [])
-      .filter(invoice => invoice.status !== 'paid' && invoice.status !== 'void')
+    draft: filteredInvoices.filter(invoice => getEffectiveInvoiceStatus(invoice, payments || [], clients || []) === 'draft').length,
+    sent: filteredInvoices.filter(invoice => getEffectiveInvoiceStatus(invoice, payments || [], clients || []) === 'sent').length,
+    paid: filteredInvoices.filter(invoice => getEffectiveInvoiceStatus(invoice, payments || [], clients || []) === 'paid').length,
+    receivable: filteredInvoices
+      .filter(invoice => {
+        const status = getEffectiveInvoiceStatus(invoice, payments || [], clients || []);
+        return status !== 'paid' && status !== 'void';
+      })
       .reduce((sum, invoice) => sum + getInvoiceDueSummary(invoice, payments || [], clients || []).totalDue, 0),
   };
 
   const updateStatus = async (invoice: Invoice, status: Invoice['status']) => {
+    if (status === 'paid') {
+      const dueSummary = getInvoiceDueSummary(invoice, payments || [], clients || []);
+      if (dueSummary.accountBalance > 0 || dueSummary.totalDue > 0) {
+        showToast('Record the payment in Billing first. The invoice will become paid when the client balance is cleared.', 'warning');
+        return;
+      }
+    }
+
     const patch = { status, paid_at: status === 'paid' ? new Date().toISOString() : invoice.paid_at || '' };
     setUpdatingId(String(invoice.id || invoice.pb_id || invoice.invoice_number));
     try {
@@ -314,6 +357,7 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         {paginatedInvoices.map(invoice => {
           const dueSummary = getInvoiceDueSummary(invoice, payments || [], clients || []);
+          const effectiveStatus = getEffectiveInvoiceStatus(invoice, payments || [], clients || []);
           return (
           <article key={String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="group overflow-hidden rounded-3xl border border-white/10 bg-white/[0.025] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.16)] transition-all hover:border-accent-green/30 hover:bg-white/[0.04]">
             <div className="mb-5 flex items-start justify-between gap-4">
@@ -337,7 +381,7 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
             <div className="grid grid-cols-3 gap-3 border-y border-white/5 py-4">
               <Meta label="Issued" value={invoice.issue_date} />
               <Meta label="Due" value={invoice.due_date} />
-              <Meta label="Status" value={invoice.status} status={invoice.status} />
+              <Meta label="Status" value={effectiveStatus} status={effectiveStatus} />
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl border border-white/10 bg-bg-deep/30 p-4 md:grid-cols-4">
               <Meta label="Subtotal" value={money(dueSummary.projectSubtotal, invoice.currency)} />
@@ -350,13 +394,13 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
                 <Download className="h-3.5 w-3.5" />
                 PDF
               </button>
-              {invoice.status === 'draft' && (
+              {effectiveStatus === 'draft' && (
                 <button onClick={() => updateStatus(invoice, 'sent')} disabled={updatingId === String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="flex items-center gap-2 rounded-xl border border-blue-400/30 bg-blue-400/10 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-blue-300 transition-all hover:bg-blue-400 hover:text-bg-deep disabled:opacity-40">
                   <Send className="h-3.5 w-3.5" />
                   Send
                 </button>
               )}
-              {invoice.status !== 'paid' && invoice.status !== 'void' && (
+              {effectiveStatus !== 'paid' && effectiveStatus !== 'void' && (
                 <button onClick={() => updateStatus(invoice, 'paid')} disabled={updatingId === String(invoice.id || invoice.pb_id || invoice.invoice_number)} className="flex items-center gap-2 rounded-xl border border-accent-green/30 bg-accent-green/10 px-4 py-2 text-[9px] font-black uppercase tracking-widest text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep disabled:opacity-40">
                   <CheckCircle2 className="h-3.5 w-3.5" />
                   Paid
@@ -387,6 +431,7 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
                 {paginatedInvoices.map(invoice => {
                   const dueSummary = getInvoiceDueSummary(invoice, payments || [], clients || []);
                   const rowId = String(invoice.id || invoice.pb_id || invoice.invoice_number);
+                  const effectiveStatus = getEffectiveInvoiceStatus(invoice, payments || [], clients || []);
                   return (
                     <tr key={rowId} className="group transition-colors hover:bg-white/[0.03]">
                       <td className="px-6 py-5">
@@ -407,12 +452,12 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
                       <td className="px-6 py-5 text-center">
                         <span className={cn(
                           'inline-flex rounded-full border px-3 py-1 text-[8px] font-black uppercase tracking-widest',
-                          invoice.status === 'paid' && 'border-accent-green/30 bg-accent-green/10 text-accent-green',
-                          invoice.status === 'sent' && 'border-blue-400/30 bg-blue-400/10 text-blue-300',
-                          invoice.status === 'draft' && 'border-white/10 bg-white/5 text-text-dim',
-                          invoice.status === 'void' && 'border-red-500/30 bg-red-500/10 text-red-400'
+                          effectiveStatus === 'paid' && 'border-accent-green/30 bg-accent-green/10 text-accent-green',
+                          effectiveStatus === 'sent' && 'border-blue-400/30 bg-blue-400/10 text-blue-300',
+                          effectiveStatus === 'draft' && 'border-white/10 bg-white/5 text-text-dim',
+                          effectiveStatus === 'void' && 'border-red-500/30 bg-red-500/10 text-red-400'
                         )}>
-                          {invoice.status}
+                          {effectiveStatus}
                         </span>
                       </td>
                       <td className="px-6 py-5">
@@ -420,12 +465,12 @@ export function Invoices({ setView }: { setView?: (view: ViewType) => void }) {
                           <button onClick={() => exportInvoicePdf(invoice, business?.[0], payments || [], clients || [])} className="rounded-xl border border-accent-green/30 bg-accent-green/10 p-2 text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep" title="Download PDF">
                             <Download className="h-4 w-4" />
                           </button>
-                          {invoice.status === 'draft' && (
+                          {effectiveStatus === 'draft' && (
                             <button onClick={() => updateStatus(invoice, 'sent')} disabled={updatingId === rowId} className="rounded-xl border border-blue-400/30 bg-blue-400/10 p-2 text-blue-300 transition-all hover:bg-blue-400 hover:text-bg-deep disabled:opacity-40" title="Mark sent">
                               <Send className="h-4 w-4" />
                             </button>
                           )}
-                          {invoice.status !== 'paid' && invoice.status !== 'void' && (
+                          {effectiveStatus !== 'paid' && effectiveStatus !== 'void' && (
                             <button onClick={() => updateStatus(invoice, 'paid')} disabled={updatingId === rowId} className="rounded-xl border border-accent-green/30 bg-accent-green/10 p-2 text-accent-green transition-all hover:bg-accent-green hover:text-bg-deep disabled:opacity-40" title="Mark paid">
                               <CheckCircle2 className="h-4 w-4" />
                             </button>
@@ -631,9 +676,23 @@ function InvoiceModal({
       return;
     }
 
+    const activeExistingInvoice = await db.invoices
+      .filter(invoice =>
+        invoice.status !== 'void' &&
+        invoice.client_id === selectedPromise.client_id &&
+        (invoice.quote_number || '') === (selectedPromise.quote_number || '')
+      )
+      .first();
+    if (activeExistingInvoice) {
+      showToast('An invoice already exists for this client quote. Use the existing invoice instead.', 'warning');
+      return;
+    }
+
+    const localInvoiceNumbers = (await db.invoices.toArray()).map(invoice => invoice.invoice_number);
+
     const payload = buildInvoicePayload({
       clientId: selectedPromise.client_id,
-      invoiceNumber: generateInvoiceNumber(new Date(), existingInvoiceNumbers),
+      invoiceNumber: generateInvoiceNumber(new Date(), Array.from(new Set([...existingInvoiceNumbers, ...localInvoiceNumbers]))),
       clientName: client?.name || selectedPromise.client_id,
       quoteId: selectedPromise.quote_id,
       quoteNumber: selectedPromise.quote_number,
