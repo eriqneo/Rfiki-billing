@@ -29,7 +29,8 @@ import {
   subMonths,
   startOfWeek,
   endOfWeek,
-  parseISO
+  parseISO,
+  isValid
 } from 'date-fns';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -37,6 +38,12 @@ import { EventSequencingModal } from '../components/EventSequencingModal';
 
 interface CalendarViewProps {
   setView: (view: any) => void;
+}
+
+function parseEventDate(value?: string) {
+  if (!value) return null;
+  const parsed = parseISO(value);
+  return isValid(parsed) ? parsed : null;
 }
 
 export function CalendarView({ setView }: CalendarViewProps) {
@@ -79,7 +86,7 @@ export function CalendarView({ setView }: CalendarViewProps) {
       location: '',
       accentColor: 'accent-green'
     }))
-  ];
+  ].filter(event => parseEventDate(event.start_time));
 
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(currentDate);
@@ -99,7 +106,10 @@ export function CalendarView({ setView }: CalendarViewProps) {
     else if (info.offset.x < -100) nextMonth();
   };
 
-  const selectedDayEvents = allEvents.filter(e => isSameDay(parseISO(e.start_time), selectedDate));
+  const selectedDayEvents = allEvents.filter(e => {
+    const eventDate = parseEventDate(e.start_time);
+    return eventDate ? isSameDay(eventDate, selectedDate) : false;
+  });
   
   const filteredEvents = selectedDayEvents.filter(e => 
     e.summary.toLowerCase().includes(sidebarSearch.toLowerCase()) ||
@@ -168,7 +178,10 @@ export function CalendarView({ setView }: CalendarViewProps) {
             
             <div className="grid grid-cols-7">
               {days.map((day, i) => {
-                const dayEvents = allEvents.filter(e => isSameDay(parseISO(e.start_time), day));
+                const dayEvents = allEvents.filter(e => {
+                  const eventDate = parseEventDate(e.start_time);
+                  return eventDate ? isSameDay(eventDate, day) : false;
+                });
                 const dayMeetings = dayEvents.filter(e => e.category === 'meeting');
                 
                 const isToday = isSameDay(day, new Date());
@@ -312,7 +325,7 @@ export function CalendarView({ setView }: CalendarViewProps) {
                           <div className="flex items-center gap-2">
                             {isPaymentDate ? <Clock className="w-4 h-4 text-accent-green" /> : <Video className="w-4 h-4 text-accent-green" />}
                             <span className="text-[9px] font-black text-text-dim uppercase tracking-widest tabular-nums">
-                              {format(parseISO(event.start_time), 'p')}
+                              {format(parseEventDate(event.start_time) || selectedDate, 'p')}
                             </span>
                           </div>
                           {client && (
