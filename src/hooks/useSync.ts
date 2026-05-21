@@ -80,7 +80,38 @@ function stripLocalFields(record: any, entity?: SyncCollection) {
     }
   }
 
+  if (entity === 'quotations') {
+    const validStatuses = new Set(['draft', 'sent', 'accepted', 'declined', 'expired']);
+    const email = String(pbData.prospect_email || '').trim();
+    const hasValidEmail = !email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+    pbData.quote_number = String(pbData.quote_number || `RFQ-${Date.now()}`).trim();
+    pbData.client_id = String(pbData.client_id || '').trim();
+    pbData.prospect_name = String(pbData.prospect_name || 'Valued Client').trim();
+    pbData.prospect_email = hasValidEmail ? email : '';
+    pbData.prospect_phone = String(pbData.prospect_phone || '').trim();
+    pbData.project_title = String(pbData.project_title || 'Project Quotation').trim();
+    pbData.project_summary = String(pbData.project_summary || '').trim();
+    pbData.issue_date = String(pbData.issue_date || new Date().toISOString()).trim();
+    pbData.valid_until = String(pbData.valid_until || '').trim();
+    pbData.currency = String(pbData.currency || 'KSh').trim();
+    pbData.items_json = Array.isArray(pbData.items_json) ? pbData.items_json : [];
+    pbData.terms_json = Array.isArray(pbData.terms_json) ? pbData.terms_json : [];
+    pbData.subtotal = Number.isFinite(Number(pbData.subtotal)) ? Number(pbData.subtotal) : 0;
+    pbData.discount_amount = Number.isFinite(Number(pbData.discount_amount)) ? Number(pbData.discount_amount) : 0;
+    pbData.tax_rate = Number.isFinite(Number(pbData.tax_rate)) ? Number(pbData.tax_rate) : 0;
+    pbData.tax_amount = Number.isFinite(Number(pbData.tax_amount)) ? Number(pbData.tax_amount) : 0;
+    pbData.total = Number.isFinite(Number(pbData.total)) ? Number(pbData.total) : 0;
+    pbData.status = validStatuses.has(pbData.status) ? pbData.status : 'draft';
+    pbData.billing_plan_created = Boolean(pbData.billing_plan_created);
+    pbData.notes = String(pbData.notes || '');
+  }
+
   return pbData;
+}
+
+function getPocketBaseErrorDetail(error: any) {
+  return error?.response?.data || error?.data || error?.response || error?.message || error;
 }
 
 function normalizeHostName(record: any) {
@@ -385,7 +416,7 @@ export function useSync() {
                     notePocketBaseRateLimit(undefined, (err as any)?.response);
                     break;
                   }
-                  console.error(`PB sync failed for ${item.entity}:`, err);
+                  console.error(`PB sync failed for ${item.entity}:`, getPocketBaseErrorDetail(err));
                   summary.failed++;
                 }
               } else if (item.operation === 'DELETE') {
