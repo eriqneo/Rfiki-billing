@@ -10,7 +10,12 @@ import { ToastProvider } from './contexts/ToastContext.tsx';
 import { registerSW } from 'virtual:pwa-register';
 
 if ('serviceWorker' in navigator) {
-  registerSW({ immediate: true });
+  const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      updateSW(true);
+    },
+  });
 }
 
 // Global error handling for system stability
