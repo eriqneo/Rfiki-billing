@@ -6,6 +6,7 @@ import './index.css';
 import { ThemeProvider } from './contexts/ThemeContext.tsx';
 import { AuthProvider } from './contexts/AuthContext.tsx';
 import { ToastProvider } from './contexts/ToastContext.tsx';
+import { AppErrorBoundary } from './components/AppErrorBoundary.tsx';
 
 import { registerSW } from 'virtual:pwa-register';
 
@@ -27,12 +28,14 @@ window.addEventListener('unhandledrejection', (event) => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ToastProvider>
-      <ThemeProvider>
-        <AuthProvider>
-          <App />
-        </AuthProvider>
-      </ThemeProvider>
-    </ToastProvider>
+    <AppErrorBoundary>
+      <ToastProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <App />
+          </AuthProvider>
+        </ThemeProvider>
+      </ToastProvider>
+    </AppErrorBoundary>
   </StrictMode>,
 );
